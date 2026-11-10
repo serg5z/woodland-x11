@@ -1,0 +1,11 @@
+# Build outputs (host tests, firmware builds, generated sketch and IDF project copies)
+build/
+# Python
+__pycache__/
+*.pyc
+# macOS
+.DS_Store
+# Local secrets and device state: never commit these
+*.key
+*.xauth
+.Xauthority

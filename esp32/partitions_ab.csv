@@ -1,0 +1,11 @@
+# Woodland X11 A/B layout for the CrowPanel ESP32-S3 (16 MB flash): app0 and app1 for OTA.
+# nvs, otadata and app0 keep the offsets and sizes of the Arduino "huge_app" table the panel
+# runs now, so the running app and the settings (Wi-Fi, cookie) survive the table change.
+# app1 takes the former spiffs + coredump area; coredump moves after it (CONFIG_ESP_COREDUMP_
+# ENABLE_TO_FLASH is on in this core). 0x620000-0xFFFFFF (9.9 MB) stays unallocated.
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x300000,
+app1,     app,  ota_1,    0x310000, 0x300000,
+coredump, data, coredump, 0x610000, 0x10000,
