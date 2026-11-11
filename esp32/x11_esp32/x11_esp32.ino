@@ -885,7 +885,7 @@ void loop() {
   if (lcd_us > lstats.lcd_us_max) lstats.lcd_us_max = lcd_us;
   lstats.lcd_win.add(lcd_us, now);
   OtaHealth h = {lcd_stats().ok, core_ready, w == WL_CONNECTED, listen_fd >= 0};
-  ota_poll(h);  PCLK_POLL(server) BACKLIGHT_POLL()  // at most one flash sector per pass; health confirmation of a new image
+  ota_poll(h);  PCLK_POLL(server) BACKLIGHT_POLL(server)  // at most one flash sector per pass; health confirmation of a new image
 #ifdef X11_SPI_ECHO
   spi_echo_poll();
 #ifdef X11_SPI_X11

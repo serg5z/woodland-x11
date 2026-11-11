@@ -5,7 +5,7 @@ CC ?= cc
 CFLAGS ?= -std=c99 -Wall -Wextra -Werror -pedantic -O1 -g
 SAN = -fsanitize=address,undefined
 
-all: build/x11_host_server build/x11_host_server_san build/x11_host_server_trace build/test_latency_trace build/ota_device_sim build/test_ota build/test_setup build/test_requests build/test_core_complete build/test_viewer_scroll build/test_stream build/test_event_drain build/test_render build/test_outq build/test_wm build/test_input build/test_copy build/test_colormap build/test_text build/test_spilink build/test_x11spi build/spilink_vectors build/test_shot build/test_mt build/test_gesture build/gesture_replay build/test_gate build/test_touchchain build/test_pclk build/test_board_start
+all: build/x11_host_server build/x11_host_server_san build/x11_host_server_trace build/test_latency_trace build/ota_device_sim build/test_ota build/test_setup build/test_requests build/test_core_complete build/test_viewer_scroll build/test_stream build/test_event_drain build/test_render build/test_outq build/test_wm build/test_input build/test_copy build/test_colormap build/test_text build/test_spilink build/test_x11spi build/spilink_vectors build/test_shot build/test_mt build/test_gesture build/gesture_replay build/test_gate build/test_touchchain build/test_pclk build/test_board_start build/test_backlight_x11
 ifeq ($(shell uname -s),Darwin)
 all: build/macos_viewer build/test_viewer_view
 VIEWER_TEST = ./build/test_viewer_view
@@ -116,6 +116,12 @@ build/test_board_start: tests/test_board_start.cpp esp32/x11_esp32/crowpanel_boa
 	@mkdir -p build
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -O1 -g $(SAN) -o $@ tests/test_board_start.cpp
 
+# The firmware's _WOODLAND_BACKLIGHT code (C++) against the real core (C, compiled separately).
+build/test_backlight_x11: tests/test_backlight_x11.cpp esp32/x11_esp32/crowpanel_board.h $(CORE) $(CORE_H)
+	@mkdir -p build/backlight_core
+	for f in $(CORE); do $(CC) $(CFLAGS) $(SAN) -c $$f -o build/backlight_core/$$(basename $$f .c).o || exit 1; done
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -O1 -g $(SAN) -o $@ tests/test_backlight_x11.cpp build/backlight_core/*.o -lm
+
 build/test_touchchain: tests/test_touchchain.c $(MT) $(MT_H) $(CORE) $(CORE_H) $(INPUT) $(INPUT_H)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_touchchain.c $(MT) $(CORE) $(INPUT) -lm
@@ -194,6 +200,7 @@ test: all
 	./build/test_touchchain
 	./build/test_pclk
 	./build/test_board_start
+	./build/test_backlight_x11
 	./build/test_wm
 	./build/test_input
 	./build/test_ota

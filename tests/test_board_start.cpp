@@ -1,6 +1,7 @@
 // esp32/x11_esp32/crowpanel_board.h: the board start-up sequence against a recording fake.
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include <string>
 #include <vector>
 
@@ -98,6 +99,50 @@ int main() {
     assert(backlight_service(b, bus, 3000) && b.errors == 2);
     assert(backlight_service(b, bus, 4000) && !b.failed && !b.pending && b.applied_pct == 100 && b.writes == 3);
     assert(!backlight_service(b, bus, 5000));
+  }
+  {  // _WOODLAND_BACKLIGHT values: parsing
+    auto parse = [](const char *v, uint32_t type = X11_ATOM_STRING, uint8_t format = 8, long *out = nullptr) {
+      long pct = -1;
+      uint8_t r = backlight_parse(type, format, (const uint8_t *)v, strlen(v), &pct);
+      if (out) *out = pct;
+      return r;
+    };
+    long pct = 0;
+    assert(parse("10", X11_ATOM_STRING, 8, &pct) == BL_ACCEPTED && pct == 10);
+    assert(parse("40", X11_ATOM_STRING, 8, &pct) == BL_ACCEPTED && pct == 40);
+    assert(parse("100", X11_ATOM_STRING, 8, &pct) == BL_ACCEPTED && pct == 100);
+    assert(parse(" 40 ", X11_ATOM_STRING, 8, &pct) == BL_ACCEPTED && pct == 40);
+    assert(parse("040", X11_ATOM_STRING, 8, &pct) == BL_ACCEPTED && pct == 40);
+    assert(parse("0") == BL_OUT_OF_RANGE && parse("9") == BL_OUT_OF_RANGE && parse("101") == BL_OUT_OF_RANGE);
+    assert(parse("99999999999999") == BL_OUT_OF_RANGE);
+    assert(parse("-40") == BL_NOT_NUMBER && parse("+40") == BL_NOT_NUMBER && parse("abc") == BL_NOT_NUMBER);
+    assert(parse("40.5") == BL_NOT_NUMBER && parse("4 0") == BL_NOT_NUMBER && parse("40%") == BL_NOT_NUMBER);
+    assert(parse("00000000000000040") == BL_NOT_NUMBER);  // longer than BACKLIGHT_PROPERTY_MAX
+    assert(parse("") == BL_EMPTY && parse("   ") == BL_EMPTY);
+    assert(parse("40", 4 /* ATOM */) == BL_BAD_TYPE && parse("40", X11_ATOM_STRING, 16) == BL_BAD_FORMAT);
+    assert(parse("40", X11_ATOM_STRING, 32) == BL_BAD_FORMAT);
+    const uint8_t nul[3] = {'4', '0', 0};  // a terminating NUL is tolerated
+    assert(backlight_parse(X11_ATOM_STRING, 8, nul, 3, &pct) == BL_ACCEPTED && pct == 40);
+  }
+  {  // _WOODLAND_BACKLIGHT values: one decision per distinct value, no write for the same level
+    Backlight b;
+    BacklightProperty p;
+    auto see = [&](const char *v) {
+      return backlight_property(b, p, true, X11_ATOM_STRING, 8, (const uint8_t *)v, strlen(v));
+    };
+    assert(backlight_property(b, p, false, 0, 0, nullptr, 0) == BL_NONE);  // no property
+    assert(see("100") == BL_UNCHANGED && !b.pending);                      // the boot level: nothing to write
+    assert(see("100") == BL_NONE);                                          // the same value again: ignored
+    assert(see("40") == BL_ACCEPTED && b.pending && b.cmd == 147 && p.last_pct == 40);
+    assert(see("40") == BL_NONE && p.accepted == 1);
+    assert(see(" 40") == BL_UNCHANGED && p.unchanged == 2);                 // new bytes, same level
+    assert(see("101") == BL_OUT_OF_RANGE && b.pct == 40 && p.rejected == 1);  // rejected: level kept
+    assert(see("x") == BL_NOT_NUMBER && p.rejected == 2 && p.last == BL_NOT_NUMBER);
+    assert(backlight_property(b, p, true, 4, 8, (const uint8_t *)"60", 2) == BL_BAD_TYPE && b.pct == 40);
+    assert(backlight_request(b, 70) && see("70") == BL_UNCHANGED);         // serial set 70 already
+    assert(see("40") == BL_ACCEPTED && b.pct == 40);
+    backlight_property(b, p, false, 0, 0, nullptr, 0);                      // deleted, then set again:
+    assert(see("40") == BL_UNCHANGED);                                      // a new value, same level
   }
   {  // boot still switches the backlight fully on (unchanged default)
     Fake f;
