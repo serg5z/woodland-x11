@@ -93,3 +93,17 @@ size_t pclk_diag_text(char *out, size_t cap);  // "pclk.*" diagnostics lines
 #define PCLK_POLL(s)
 #define PCLK_DIAG_TEXT(out, cap) ((size_t)0)
 #endif
+
+#ifdef X11_BACKLIGHT  // runtime backlight level, serial BACKLIGHT <10..100>; IDF64 builds
+// A serial line, before command() splits it: true when it was a BACKLIGHT command.
+bool backlight_serial(const char *line);
+void backlight_poll();                              // from loop(): sends a due level
+size_t backlight_diag_text(char *out, size_t cap);  // "lcd.backlight_*" diagnostics lines
+#define BACKLIGHT_COMMAND(line) if (backlight_serial(line)) return;
+#define BACKLIGHT_POLL() backlight_poll();
+#define BACKLIGHT_DIAG_TEXT(out, cap) backlight_diag_text(out, cap)
+#else
+#define BACKLIGHT_COMMAND(line)  // no tokens: other builds compile exactly as before
+#define BACKLIGHT_POLL()
+#define BACKLIGHT_DIAG_TEXT(out, cap) ((size_t)0)
+#endif

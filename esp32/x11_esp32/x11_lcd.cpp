@@ -447,3 +447,57 @@ size_t pclk_diag_text(char *out, size_t cap) {
   return (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
 }
 #endif
+
+#ifdef X11_BACKLIGHT
+// ---------------------------------------------------------------- runtime backlight level
+// Writes from loop() only, the task that also reads touch on this I2C port.
+namespace {
+crowpanel43_board::Backlight backlight;
+struct BacklightIo {
+  bool write(uint8_t addr, uint8_t byte) {
+    Wire.beginTransmission(addr);
+    Wire.write(byte);
+    return Wire.endTransmission() == 0;
+  }
+};
+}  // namespace
+
+bool backlight_serial(const char *line) {
+  if (strncmp(line, "BACKLIGHT", 9) || (line[9] && line[9] != ' ')) return false;
+  const char *arg = line[9] ? line + 10 : nullptr;
+  if (!arg) {
+    Serial.printf("backlight %u%% (command %u), writes %lu, errors %lu%s\n", (unsigned)backlight.applied_pct,
+                  (unsigned)crowpanel43_board::backlight_command(backlight.applied_pct), (unsigned long)backlight.writes,
+                  (unsigned long)backlight.errors, backlight.pending ? ", a change is pending" : "");
+    return true;
+  }
+  char *end = nullptr;
+  long pct = strtol(arg, &end, 10);
+  while (end && (*end == ' ' || *end == '%')) ++end;
+  if (end == arg || (end && *end) || !crowpanel43_board::backlight_request(backlight, pct)) {
+    Serial.printf("BACKLIGHT <%d..%d> (percent; not stored, every boot starts at 100)\n",
+                  crowpanel43_board::BACKLIGHT_MIN_PCT, crowpanel43_board::BACKLIGHT_MAX_PCT);
+    return true;
+  }
+  Serial.printf("backlight %ld%% requested (command %u)\n", pct, (unsigned)backlight.cmd);
+  return true;
+}
+
+void backlight_poll() {
+  BacklightIo io;
+  if (crowpanel43_board::backlight_service(backlight, io, millis()))
+    Serial.printf("backlight: command %u %s\n", (unsigned)backlight.cmd,
+                  backlight.failed ? "not acknowledged, retrying in 1 s" : "acknowledged");
+}
+
+size_t backlight_diag_text(char *out, size_t cap) {
+  int n = snprintf(out, cap,
+                   "lcd.backlight_pct=%u\nlcd.backlight_cmd=%u\nlcd.backlight_requested_pct=%u\n"
+                   "lcd.backlight_pending=%d\nlcd.backlight_writes=%lu\nlcd.backlight_errors=%lu\n",
+                   (unsigned)backlight.applied_pct, (unsigned)crowpanel43_board::backlight_command(backlight.applied_pct),
+                   (unsigned)backlight.pct, backlight.pending ? 1 : 0, (unsigned long)backlight.writes,
+                   (unsigned long)backlight.errors);
+  if (n < 0) return 0;
+  return (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
+}
+#endif

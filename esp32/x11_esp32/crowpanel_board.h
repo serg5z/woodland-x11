@@ -50,4 +50,61 @@ bool start(Io &io) {
   return ready;
 }
 
+// ---- Runtime backlight level (IDF64 builds, -DX11_BACKLIGHT) -----------------------------
+// The board microcontroller dims the backlight itself; the level is one command byte. The
+// mapping and the write policy are those of the Woodland Lab firmware's display settings:
+// percent to command linearly (100 % -> 0, 0 % -> 245), never a command above 245 (246+ are
+// other board commands), at most one write per 30 ms, a 1 s pause after a failed write.
+// The level is not stored: every boot starts at 100 % (start() sends CMD_BACKLIGHT_FULL).
+constexpr uint8_t CMD_BACKLIGHT_OFF = 245;
+constexpr int BACKLIGHT_MIN_PCT = 10;   // the command cannot switch the backlight off
+constexpr int BACKLIGHT_MAX_PCT = 100;
+constexpr uint32_t BACKLIGHT_MIN_INTERVAL_MS = 30;
+constexpr uint32_t BACKLIGHT_RETRY_MS = 1000;
+
+constexpr uint8_t backlight_command(int pct) {
+  return (uint8_t)(((100 - (pct < 0 ? 0 : pct > 100 ? 100 : pct)) * CMD_BACKLIGHT_OFF + 50) / 100);
+}
+
+struct Backlight {
+  uint8_t pct = 100;                   // requested level
+  uint8_t cmd = CMD_BACKLIGHT_FULL;    // its command
+  uint8_t applied_pct = 100;           // last level the microcontroller acknowledged (boot: 100)
+  bool pending = false;                // a write is due
+  bool failed = false;                 // the last write was not acknowledged
+  uint32_t last_ms = 0, writes = 0, errors = 0;
+};
+
+// A new level, BACKLIGHT_MIN_PCT..BACKLIGHT_MAX_PCT; false (and nothing changes) otherwise.
+inline bool backlight_request(Backlight &b, long pct) {
+  if (pct < BACKLIGHT_MIN_PCT || pct > BACKLIGHT_MAX_PCT) return false;
+  b.pct = (uint8_t)pct;
+  b.cmd = backlight_command((int)pct);
+  b.pending = true;
+  return true;
+}
+
+// From loop(): sends a due level. Io::write(addr, byte) returns whether it was acknowledged.
+// Returns true when a write was attempted.
+template <class Io>
+bool backlight_service(Backlight &b, Io &io, uint32_t now_ms) {
+  if (!b.pending) return false;
+  if (b.writes + b.errors && now_ms - b.last_ms < (b.failed ? BACKLIGHT_RETRY_MS : BACKLIGHT_MIN_INTERVAL_MS))
+    return false;
+  b.last_ms = now_ms;
+  if (b.cmd > CMD_BACKLIGHT_OFF) {  // cannot happen through backlight_request
+    b.pending = false;
+    return false;
+  }
+  if (io.write(MCU_ADDR, b.cmd)) {
+    ++b.writes;
+    b.failed = b.pending = false;
+    b.applied_pct = b.pct;
+  } else {
+    ++b.errors;
+    b.failed = true;
+  }
+  return true;
+}
+
 }  // namespace crowpanel43_board

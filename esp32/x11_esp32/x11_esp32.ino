@@ -371,7 +371,7 @@ static size_t diag(void *, char *out, size_t cap) {
   size_t used = n < 0 ? 0 : (size_t)n < cap ? (size_t)n : cap - 1;
   used += x11_server_stats(server, out + used, cap - used);
   used += x11_net_stats(net, out + used, cap - used);
-  used += ota_diag(out + used, cap - used);
+  used += ota_diag(out + used, cap - used);  used += used < cap ? BACKLIGHT_DIAG_TEXT(out + used, cap - used) : 0;
 #ifdef X11_SPI_ECHO
   used += spi_echo_diag(out + used, cap - used), used += used < cap ? TOUCH_DIAG_TEXT(out + used, cap - used) : 0, used += used < cap ? PCLK_DIAG_TEXT(out + used, cap - used) : 0;
 #ifdef X11_SPI_X11
@@ -532,7 +532,7 @@ static void print_touch() {
 // ---------------------------------------------------------------- serial commands
 
 static void command(char *line) {
-  char *arg = strchr(line, ' ');
+  char *arg = strchr(line, ' ');  BACKLIGHT_COMMAND(line)
   if (arg) *arg++ = 0;
   if (!strcmp(line, "WIFI_SSID") && arg) {
     prefs.putString("ssid", arg);
@@ -885,7 +885,7 @@ void loop() {
   if (lcd_us > lstats.lcd_us_max) lstats.lcd_us_max = lcd_us;
   lstats.lcd_win.add(lcd_us, now);
   OtaHealth h = {lcd_stats().ok, core_ready, w == WL_CONNECTED, listen_fd >= 0};
-  ota_poll(h);  PCLK_POLL(server)  // at most one flash sector per pass; health confirmation of a new image
+  ota_poll(h);  PCLK_POLL(server) BACKLIGHT_POLL()  // at most one flash sector per pass; health confirmation of a new image
 #ifdef X11_SPI_ECHO
   spi_echo_poll();
 #ifdef X11_SPI_X11
