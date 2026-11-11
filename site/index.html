@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Woodland X11 — Real X11. Tiny hardware.</title>
+  <meta name="description" content="An experimental X Window System server running on ESP32-S3, bringing Linux X11 applications to inexpensive touchscreens over SPI or Wi-Fi.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0e1110">
+  <link rel="canonical" href="https://woodlandx11.dev/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="lab">Woodland Lab</header>
+
+  <main>
+    <h1>Woodland X11</h1>
+    <p class="tagline">Real X11. Tiny hardware.</p>
+
+    <p class="lead">An experimental X Window System server running on ESP32-S3, bringing Linux X11
+      applications to inexpensive touchscreens over SPI or Wi-Fi.</p>
+
+    <!-- Later: hardware photos, architecture notes and the GitHub link go in sections here. -->
+    <section aria-labelledby="facts-title">
+      <h2 id="facts-title">What it is</h2>
+      <ul class="facts">
+        <li>The X11 core protocol, implemented from the specification. No extensions.</li>
+        <li>Runs on an ESP32-S3 with PSRAM; tested on an ELECROW CrowPanel Advance 4.3″ (800×480).</li>
+        <li>Clients connect over Wi-Fi, or over SPI from a Raspberry Pi host.</li>
+        <li>The touchscreen is the X pointer.</li>
+      </ul>
+    </section>
+
+    <p class="note">Built for curiosity. Tested on real hardware.</p>
+    <p class="status"><span aria-hidden="true">&gt;</span> Open-source release in preparation.</p>
+  </main>
+
+  <footer>A Woodland Lab project · © 2026 Sergey Zorin</footer>
+</body>
+</html>
