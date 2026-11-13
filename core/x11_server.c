@@ -1486,7 +1486,7 @@ static void gc_defaults(x11_gc *g, uint8_t depth) {
   g->cap_style = 1;           /* CapButt */
   g->arc_mode = 1;            /* PieSlice */
   g->graphics_exposures = 1;
-  g->dashes = 4;
+  g->ndash = 1, g->dash[0] = 4;
   g->nclip = -1;
   g->font = 0;                /* the server's default font (gc_font) */
 }
@@ -1574,7 +1574,7 @@ static size_t gc_values(ctx *x, x11_gc *g, uint32_t mask, const uint8_t *v) {
         g->clip_mask = 0;
         break;
       case 20: g->dash_offset = (uint16_t)val; break;
-      case 21: if (val == 0 || val > 255) return error(x, X11_BAD_VALUE, val); g->dashes = (uint8_t)val; break;
+      case 21: if (val == 0 || val > 255) return error(x, X11_BAD_VALUE, val); g->ndash = 1, g->dash[0] = (uint8_t)val; break;
       case 22: if (val > 1) return error(x, X11_BAD_VALUE, val); g->arc_mode = (uint8_t)val; break;
     }
   }
@@ -1649,8 +1649,9 @@ static size_t copy_gc(ctx *x) {
   C(0, function); C(1, plane_mask); C(2, fg); C(3, bg); C(4, line_width); C(5, line_style); C(6, cap_style);
   C(7, join_style); C(8, fill_style); C(9, fill_rule); C(12, ts_x); C(13, ts_y);
   C(14, font); C(15, subwindow_mode); C(16, graphics_exposures); C(17, clip_x); C(18, clip_y); C(20, dash_offset);
-  C(21, dashes); C(22, arc_mode);
+  C(22, arc_mode);
 #undef C
+  if (m & (1u << 21)) b->ndash = a->ndash, memcpy(b->dash, a->dash, sizeof(b->dash));
   if (m & (1u << 19)) {
     b->nclip = a->nclip;
     memcpy(b->clip, a->clip, sizeof(b->clip));
@@ -1676,7 +1677,8 @@ static size_t set_dashes(ctx *x) {
   for (size_t i = 0; i < n; ++i)
     if (!U8(12 + i)) return error(x, X11_BAD_VALUE, 0);
   g->dash_offset = U16(8);
-  g->dashes = U8(12);  /* only the first length is kept (dashed drawing is not implemented) */
+  g->ndash = n <= XR_MAX_DASHES ? (uint8_t)n : 0;  /* longer lists: drawing with them is not implemented */
+  if (g->ndash) memcpy(g->dash, x->q + 12, n);
   return 0;
 }
 
@@ -1763,8 +1765,10 @@ static size_t resolve(ctx *x, uint32_t did, uint32_t gid, target *t, x11_gc **gc
     xr_pool_release(m);
   }
   /* need_solid: 0 copies and ImageText (no fill style, no line style); 1 points, fills and
-   * text (the fill style applies); 2 lines and arc outlines (dashed lines: not yet) */
+   * text (the fill style applies); 2 lines and arc outlines (dashed lines: not yet); 3
+   * rectangle outlines (dashed lines too, with a dash list of up to XR_MAX_DASHES) */
   if (need_solid == 2 && g->line_style != 0) return error(x, X11_BAD_IMPLEMENTATION, 0);
+  if (need_solid == 3 && g->line_style != 0 && !g->ndash) return error(x, X11_BAD_IMPLEMENTATION, 0);
   if (need_solid && g->fill_style) {
     static xr_fill f;  /* in use until the request ends (client_request clears it) */
     f.style = g->fill_style;
@@ -1816,27 +1820,19 @@ static size_t poly_fill_rectangle(ctx *x) {
   return 0;
 }
 
+/* Each rectangle as a closed PolyLine with the GC's line attributes (x11_outline.c). Odd dashes
+ * of LineDoubleDash use the background (through the stipple for FillStippled); with a tiled or
+ * opaque-stippled fill they look like even dashes, as the protocol says. */
 static size_t poly_rectangle(ctx *x) {
-  DRAW_PROLOGUE(12, 8, 2);
-  int lw = g->line_width;
+  DRAW_PROLOGUE(12, 8, 3);
+  xr_paint odd = p;
+  odd.fg = p.bg;
+  xr_line_attr la = {g->line_width, g->line_style, g->cap_style, g->join_style, g->ndash, g->dash, g->dash_offset,
+                     g->fill_style};
   for (size_t i = 0; i < n; ++i) {
     const size_t o = 12 + 8 * i;
-    int rx = t.ox + I16(o), ry = t.oy + I16(o + 2), rw = U16(o + 4), rh = U16(o + 6);
-    if (lw <= 1) {  /* outline through pixel centres: covers x..x+w and y..y+h */
-      xr_fill_rect(t.surf, t.clip, &p, rx, ry, rw + 1, 1);
-      xr_fill_rect(t.surf, t.clip, &p, rx, ry + rh, rw + 1, 1);
-      if (rh > 1) {
-        xr_fill_rect(t.surf, t.clip, &p, rx, ry + 1, 1, rh - 1);
-        xr_fill_rect(t.surf, t.clip, &p, rx + rw, ry + 1, 1, rh - 1);
-      }
-      damage_commit(x->s);
-    } else {  /* wide outline: the band between the outer and inner rectangle */
-      int h1 = lw / 2, h2 = lw - h1;
-      xr_fill_rect(t.surf, t.clip, &p, rx - h1, ry - h1, rw + lw, lw);
-      xr_fill_rect(t.surf, t.clip, &p, rx - h1, ry + rh - h1, rw + lw, lw);
-      xr_fill_rect(t.surf, t.clip, &p, rx - h1, ry + h2, lw, rh - lw);
-      xr_fill_rect(t.surf, t.clip, &p, rx + rw - h1, ry + h2, lw, rh - lw);
-    }
+    xr_rect_outline(t.surf, t.clip, &p, &odd, &la, t.ox, t.oy, I16(o), I16(o + 2), U16(o + 4), U16(o + 6));
+    damage_commit(x->s);
   }
   touched(x, &t);
   return 0;

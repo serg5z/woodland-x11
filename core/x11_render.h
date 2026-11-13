@@ -135,6 +135,25 @@ void xr_fill_tile(const xr_surface *dst, const xr_region *clip, const xr_paint *
 
 uint32_t xr_get(const xr_surface *s, int x, int y);
 
+/* ---- rectangle outlines (PolyRectangle; core/x11_outline.c) -------------------------------
+ * Each rectangle is drawn as the closed path (x,y) (x+w,y) (x+w,y+h) (x,y+h) (x,y) with the GC's
+ * line attributes, no pixel more than once per rectangle. Pixels follow the X.Org sample server
+ * (mi/fb); see x11_outline.c for where they differ. */
+#define XR_MAX_DASHES 16
+typedef struct {
+  int width;               /* line width; 0: thin line */
+  uint8_t style;           /* 0 LineSolid, 1 LineOnOffDash, 2 LineDoubleDash */
+  uint8_t cap, join;       /* CapNotLast 0, Butt 1, Round 2, Projecting 3; JoinMiter 0, Round 1, Bevel 2 */
+  uint8_t ndash;           /* 1..XR_MAX_DASHES lengths in dash (non-zero) */
+  const uint8_t *dash;
+  int dash_offset;
+  uint8_t fill_style;      /* the GC's: 0 Solid, 1 Tiled, 2 Stippled, 3 OpaqueStippled */
+} xr_line_attr;
+/* x, y relative to the drawable at (ox, oy) in surface pixels. even: solid lines and even dashes;
+ * odd: the odd dashes of LineDoubleDash. */
+void xr_rect_outline(const xr_surface *s, const xr_region *clip, const xr_paint *even, const xr_paint *odd,
+                     const xr_line_attr *la, int ox, int oy, int x, int y, int w, int h);
+
 #ifdef __cplusplus
 }
 #endif

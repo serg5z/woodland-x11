@@ -63,7 +63,9 @@ typedef struct x11_cmap_use {
 typedef struct x11_gc {
   uint8_t depth;
   uint8_t function, line_style, cap_style, join_style, fill_style, fill_rule, subwindow_mode, graphics_exposures,
-      arc_mode, dashes;
+      arc_mode;
+  uint8_t ndash;                /* dash list length 1..XR_MAX_DASHES; 0: longer (kept by count only) */
+  uint8_t dash[XR_MAX_DASHES];
   uint32_t plane_mask, fg, bg, clip_mask;
   xr_surface *tile, *stipple;   /* copies taken when set (the protocol allows it); NULL: default */
   const x11_font *font;         /* NULL: the default font; kept after CloseFont (fonts are static) */

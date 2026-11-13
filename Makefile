@@ -5,13 +5,13 @@ CC ?= cc
 CFLAGS ?= -std=c99 -Wall -Wextra -Werror -pedantic -O1 -g
 SAN = -fsanitize=address,undefined
 
-all: build/x11_host_server build/x11_host_server_san build/x11_host_server_trace build/test_latency_trace build/ota_device_sim build/test_ota build/test_setup build/test_requests build/test_core_complete build/test_viewer_scroll build/test_stream build/test_event_drain build/test_render build/test_outq build/test_wm build/test_input build/test_copy build/test_colormap build/test_text build/test_spilink build/test_x11spi build/spilink_vectors build/test_shot build/test_mt build/test_gesture build/gesture_replay build/test_gate build/test_touchchain build/test_pclk build/test_board_start
+all: build/x11_host_server build/x11_host_server_san build/x11_host_server_trace build/test_latency_trace build/ota_device_sim build/test_ota build/test_setup build/test_requests build/test_core_complete build/test_polyrect build/test_viewer_scroll build/test_stream build/test_event_drain build/test_render build/test_outq build/test_wm build/test_input build/test_copy build/test_colormap build/test_text build/test_spilink build/test_x11spi build/spilink_vectors build/test_shot build/test_mt build/test_gesture build/gesture_replay build/test_gate build/test_touchchain build/test_pclk build/test_board_start
 ifeq ($(shell uname -s),Darwin)
 all: build/macos_viewer build/test_viewer_view
 VIEWER_TEST = ./build/test_viewer_view
 endif
 
-CORE = core/x11_setup.c core/x11_server.c core/x11_window.c core/x11_input.c core/x11_render.c core/x11_font.c core/x11_font_fixed.c core/x11_font_cursor.c core/x11_colors.c
+CORE = core/x11_setup.c core/x11_server.c core/x11_window.c core/x11_input.c core/x11_render.c core/x11_outline.c core/x11_font.c core/x11_font_fixed.c core/x11_font_cursor.c core/x11_colors.c
 CORE_H = core/x11_setup.h core/x11_server.h core/x11_internal.h core/x11_render.h core/x11_font.h core/x11_colors.h
 VIEWER = host/viewer_link.c
 VIEWER_H = host/viewer_link.h
@@ -91,6 +91,10 @@ build/test_requests: tests/test_requests.c $(CORE) $(CORE_H)
 build/test_core_complete: tests/test_core_complete.c $(CORE) $(CORE_H)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_core_complete.c $(CORE) -lm
+
+build/test_polyrect: tests/test_polyrect.c $(CORE) $(CORE_H)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_polyrect.c $(CORE) -lm
 
 build/test_event_drain: tests/test_event_drain.c spilink/event_drain.h
 	@mkdir -p build
@@ -177,6 +181,7 @@ test: all
 	./build/test_setup
 	./build/test_requests
 	./build/test_core_complete
+	./build/test_polyrect
 	./build/test_viewer_scroll
 	$(VIEWER_TEST)
 	./build/test_stream
