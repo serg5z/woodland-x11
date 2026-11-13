@@ -17,10 +17,21 @@ security review beyond MIT-MAGIC-COOKIE-1 authentication and an authenticated OT
   2 UNSUPPORTED; the FAILs are ChangeHosts 1 and SetAccessControl 1 (host access changes are
   refused by design) and CopyPlane 1.
 - One TrueColor visual, depth 16 (RGB565); pixmap depths 16 and 1.
-- Fonts: a built-in 6×12 `fixed` font and the cursor font. No font server, no scalable fonts.
+- Fonts: a built-in 6×12 `fixed` font (characters 32–126) and the cursor font. No font server,
+  no scalable fonts, no ISO10646 (Unicode) font: xterm in a UTF-8 locale warns that it cannot
+  load one and draws a dashed box for each character the font lacks.
+- Lines: PolyRectangle supports every line style (solid, on-off and double dashes), cap and
+  join style, matching Xorg's pixels (`tools/xts/polyrect_diff.py`), with two deliberate
+  differences:
+  - each pixel of a rectangle is drawn once, as the protocol requires; Xorg draws some pixels
+    twice (corners, folded zero-width or zero-height rectangles), which shows only with
+    functions such as GXxor, GXand or GXor, where the results then differ;
+  - a GC keeps dash lists of up to 16 lengths; SetDashes accepts longer lists, but dashed
+    drawing with them answers BadImplementation (solid drawing with that GC still works).
 - Input: touch as the core pointer (Button1); two-finger scroll (Buttons 4/5) and tap
   (Button3); no keyboard input (a default US keymap and modifier map are reported to clients).
-- Not supported: extensions (XKB, RENDER, XTEST, SHAPE, …), wide/dashed lines and arcs drawn
+- Not supported: extensions (XKB, RENDER, XTEST, SHAPE, …), dashed lines in PolyLine,
+  PolySegment and PolyArc (BadImplementation), wide lines and arcs other than rectangles drawn
   pixel-exactly, CopyPlane from depth 16, clip masks over 64 rectangles.
 - Known open issues: a few pointer/keyboard grab cases; a two-finger tap held longer than
   300 ms is not a tap; an intermittent RTC-watchdog reset after a software restart (the panel
@@ -151,8 +162,8 @@ them:
 ## Conformance testing
 
 `tools/xts/` builds XTS in a Debian container (`Dockerfile`) and runs it against Xvfb or the
-sanitizer host server (`run_xts.sh`); `core_diff.py`, `cmap_diff.py`, `font_diff.py` and
-`getimage_diff.py` compare replies with Xvfb.
+sanitizer host server (`run_xts.sh`); `core_diff.py`, `cmap_diff.py`, `font_diff.py`,
+`getimage_diff.py` and `polyrect_diff.py` compare replies and drawn pixels with Xvfb.
 
 ## License
 
