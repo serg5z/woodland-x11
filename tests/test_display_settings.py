@@ -101,9 +101,12 @@ class HostServer(unittest.TestCase):
             shown = f.read()
         out, err = cli.communicate(timeout=30)
         self.assertEqual(cli.returncode, 0, out + err)
-        with open(self.png, "wb") as f:
+        # A file of its own: the server is still running and rewrites self.png when the tool's
+        # window goes away, which could replace the screenshot before it is read.
+        shot = os.path.join(os.path.dirname(self.png), "shown.png")
+        with open(shot, "wb") as f:
             f.write(shown)
-        w, h, rows = read_png(self.png)
+        w, h, rows = read_png(shot)
         x0, y0, x1, y1 = ds.Window.BTN[16]  # without the feature: 16 MHz selected
         self.assertEqual(rows[y0 + 5][x0 + 5], (0, 158, 255))
         x0, y0, x1, y1 = ds.Window.BTN[12]
