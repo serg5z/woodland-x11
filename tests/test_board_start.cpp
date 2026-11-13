@@ -68,7 +68,7 @@ int main() {
     parts.push_back({"send 48 0"});
     assert(f.trace == expect(parts));
   }
-  {  // the runtime backlight level: mapping (the Woodland Lab values), limits, write policy
+  {  // the runtime backlight level: mapping (percent to command byte), limits, write policy
     assert(backlight_command(100) == 0 && backlight_command(0) == 245);
     assert(backlight_command(20) == 196 && backlight_command(40) == 147 && backlight_command(10) == 221);
     for (int p = -5; p <= 300; ++p) assert(backlight_command(p) <= CMD_BACKLIGHT_OFF);

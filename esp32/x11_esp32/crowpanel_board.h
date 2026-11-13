@@ -53,8 +53,8 @@ bool start(Io &io) {
 }
 
 // ---- Runtime backlight level (IDF64 builds, -DX11_BACKLIGHT) -----------------------------
-// The board microcontroller dims the backlight itself; the level is one command byte. The
-// mapping and the write policy are those of the Woodland Lab firmware's display settings:
+// The board microcontroller dims the backlight itself; the level is one command byte.
+// Mapping and write policy:
 // percent to command linearly (100 % -> 0, 0 % -> 245), never a command above 245 (246+ are
 // other board commands), at most one write per 30 ms, a 1 s pause after a failed write.
 // The level is not stored: every boot starts at 100 % (start() sends CMD_BACKLIGHT_FULL).
