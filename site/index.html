@@ -10,6 +10,16 @@
   <link rel="canonical" href="https://woodlandx11.dev/">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://woodlandx11.dev/">
+  <meta property="og:title" content="Woodland X11 — Real X11. Tiny hardware.">
+  <meta property="og:description" content="An experimental X Window System server running on ESP32-S3, bringing Linux X11 applications to inexpensive touchscreens over SPI or Wi-Fi.">
+  <meta property="og:image" content="https://woodlandx11.dev/img/crowpanel-x11-1280.jpg">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="960">
+  <meta property="og:image:alt" content="An ELECROW CrowPanel 4.3-inch touchscreen showing xclock, xcalc and xeyes under the Blackbox window manager.">
+  <meta name="twitter:card" content="summary_large_image">
+  <script src="demo.js" defer></script>
 </head>
 <body>
   <header class="lab">Woodland Lab</header>
@@ -21,15 +31,47 @@
     <p class="lead">An experimental X Window System server running on ESP32-S3, bringing Linux X11
       applications to inexpensive touchscreens over SPI or Wi-Fi.</p>
 
-    <!-- Later: hardware photos and architecture notes go in sections here. -->
+    <figure class="hero">
+      <picture>
+        <source type="image/webp" sizes="(min-width: 42rem) 42rem, 100vw"
+          srcset="img/crowpanel-x11-800.webp 800w, img/crowpanel-x11-1280.webp 1280w, img/crowpanel-x11-1920.webp 1920w">
+        <img src="img/crowpanel-x11-1280.jpg" sizes="(min-width: 42rem) 42rem, 100vw"
+          srcset="img/crowpanel-x11-800.jpg 800w, img/crowpanel-x11-1280.jpg 1280w, img/crowpanel-x11-1920.jpg 1920w"
+          width="1280" height="960" fetchpriority="high" decoding="async"
+          alt="An ELECROW CrowPanel 4.3-inch touchscreen, USB-C cable attached, resting on a laptop keyboard. Its screen shows xclock, xcalc and xeyes in Blackbox window frames, with the Blackbox toolbar reading Workspace 1 and 11:49 AM.">
+      </picture>
+      <figcaption>The CrowPanel running Woodland X11: xclock, xcalc and xeyes under the Blackbox
+        window manager, all ordinary X11 clients.</figcaption>
+    </figure>
+
+    <p class="actions">
+      <a class="button" href="#demo">Watch the demo</a>
+      <a class="button" href="https://github.com/serg5z/woodland-x11">Source on GitHub</a>
+    </p>
+
     <section aria-labelledby="facts-title">
       <h2 id="facts-title">What it is</h2>
       <ul class="facts">
         <li>The X11 core protocol, implemented from the specification. No extensions.</li>
         <li>Runs on an ESP32-S3 with PSRAM; tested on an ELECROW CrowPanel Advance 4.3″ (800×480).</li>
         <li>Clients connect over Wi-Fi, or over SPI from a Raspberry Pi host.</li>
+        <li>The server draws on the panel itself: clients send X11 requests, not framebuffer
+          images, so there is no screen streaming.</li>
         <li>The touchscreen is the X pointer.</li>
       </ul>
+    </section>
+
+    <section id="demo" aria-labelledby="demo-title">
+      <h2 id="demo-title">Demo</h2>
+      <div class="video">
+        <a class="video-link" href="https://www.youtube.com/watch?v=asiljNp275Y"
+          data-embed="https://www.youtube-nocookie.com/embed/asiljNp275Y?autoplay=1">
+          <span class="play" aria-hidden="true"></span>
+          <span class="video-title">Watch the demo on YouTube</span>
+        </a>
+      </div>
+      <p class="note">“Woodland X11 demo” on YouTube. The player loads from youtube-nocookie.com only
+        after you click.</p>
     </section>
 
     <p class="note">Built for curiosity. Tested on real hardware.</p>
