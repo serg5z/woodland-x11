@@ -40,6 +40,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_app_desc.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
 #include <esp_system.h>
@@ -329,6 +330,27 @@ static const char *reset_reason() {
   }
 }
 
+// Heap totals and fragmentation (heap_caps_get_info walks each heap, so only when diagnostics
+// are read, never per request) and the running image's identity, so every benchmark sample
+// names its build.
+static size_t mem_diag(char *out, size_t cap) {
+  multi_heap_info_t in = {}, ps = {};
+  heap_caps_get_info(&in, MALLOC_CAP_INTERNAL);
+  heap_caps_get_info(&ps, MALLOC_CAP_SPIRAM);
+  const esp_app_desc_t *d = esp_app_get_description();
+  char sha[17];
+  for (int i = 0; i < 8; ++i) snprintf(sha + 2 * i, 3, "%02x", d->app_elf_sha256[i]);
+  int n = snprintf(out, cap,
+                   "esp.heap_internal_allocated=%u\nesp.heap_internal_alloc_blocks=%u\nesp.heap_internal_free_blocks=%u\n"
+                   "esp.psram_allocated=%u\nesp.psram_alloc_blocks=%u\nesp.psram_free_blocks=%u\n"
+                   "esp.app_version=%s\nesp.app_elf_sha256=%s\nesp.idf_version=%s\n",
+                   (unsigned)in.total_allocated_bytes, (unsigned)in.allocated_blocks, (unsigned)in.free_blocks,
+                   (unsigned)ps.total_allocated_bytes, (unsigned)ps.allocated_blocks, (unsigned)ps.free_blocks,
+                   d->version, sha, d->idf_ver);
+  if (n < 0) return 0;
+  return (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
+}
+
 // _WOODLAND_DIAG: generated at each read (key=value lines). Counters are cumulative since
 // boot; *_10s are maxima over the last 5-10 s. No credentials, no cookie.
 static size_t diag(void *, char *out, size_t cap) {
@@ -371,6 +393,7 @@ static size_t diag(void *, char *out, size_t cap) {
   size_t used = n < 0 ? 0 : (size_t)n < cap ? (size_t)n : cap - 1;
   used += x11_server_stats(server, out + used, cap - used);
   used += x11_net_stats(net, out + used, cap - used);
+  used += used < cap ? mem_diag(out + used, cap - used) : 0;
   used += ota_diag(out + used, cap - used);  used += used < cap ? BACKLIGHT_DIAG_TEXT(out + used, cap - used) : 0;
 #ifdef X11_SPI_ECHO
   used += spi_echo_diag(out + used, cap - used), used += used < cap ? TOUCH_DIAG_TEXT(out + used, cap - used) : 0, used += used < cap ? PCLK_DIAG_TEXT(out + used, cap - used) : 0;

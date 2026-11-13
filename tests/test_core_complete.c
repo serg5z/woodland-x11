@@ -4,6 +4,7 @@
  * the expected answers are Xvfb's (tools/xts/core_diff.py), except where the security model
  * differs (host access: BadAccess). Run with ASan/UBSan (Makefile). */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../core/x11_internal.h"
@@ -425,6 +426,64 @@ static void test_retain_cap(void) {
   x11_server_free(&srv);
 }
 
+/* The diagnostics' resource counts by type, pixmap bytes and properties: they follow what a
+ * client creates and return exactly to the start when the client closes. */
+static unsigned long stat_value(const char *key) {
+  static char text[4096];
+  x11_server_stats(&srv, text, sizeof(text));
+  char want[64];
+  snprintf(want, sizeof(want), "%s=", key);
+  const char *at = strstr(text, want);
+  CHECK(at != NULL);
+  return at ? strtoul(at + strlen(want), NULL, 10) : 0;
+}
+static void test_resource_counts(int msb) {
+  start(0, NULL);
+  static const char *const keys[] = {"core.res_windows", "core.res_pixmaps", "core.res_gcs", "core.pixmap_bytes",
+                                     "core.properties", "core.property_bytes", "core.resources"};
+  unsigned long before[7];
+  for (int i = 0; i < 7; ++i) before[i] = stat_value(keys[i]);
+  CHECK(before[0] >= 1);  /* the root window */
+  int c = open_client(msb);
+  uint32_t base = srv.clients[c].id_base;
+  rq q;
+  for (uint32_t k = 1; k <= 2; ++k) {  /* two windows */
+    beg(&q, c, 1, 0);
+    w32(&q, base + k); w32(&q, X11_ID_ROOT_WINDOW); w32(&q, 0); w32(&q, 20 | 20u << 16); w32(&q, 1u << 16); w32(&q, 0);
+    w32(&q, 0);
+    CHECK(send_q(c, &q) == 0);
+  }
+  beg(&q, c, 18, 0);  /* ChangeProperty WM_NAME (39) on the first window: STRING "abcde" */
+  w32(&q, base + 1); w32(&q, 39); w32(&q, 31); w8x4(&q, 8, 0, 0, 0); w32(&q, 5);
+  memcpy(q.b + q.n, "abcde\0\0\0", 8), q.n += 8;
+  CHECK(send_q(c, &q) == 0);
+  beg(&q, c, 53, 16);  /* 30x7 depth 16 and 13x5 depth 1 */
+  w32(&q, base + 3); w32(&q, X11_ID_ROOT_WINDOW); w32(&q, 30 | 7u << 16);
+  CHECK(send_q(c, &q) == 0);
+  beg(&q, c, 53, 1);
+  w32(&q, base + 4); w32(&q, X11_ID_ROOT_WINDOW); w32(&q, 13 | 5u << 16);
+  CHECK(send_q(c, &q) == 0);
+  beg(&q, c, 55, 0);  /* CreateGC */
+  w32(&q, base + 5); w32(&q, base + 1); w32(&q, 0);
+  CHECK(send_q(c, &q) == 0);
+  unsigned long pixbytes = 0;
+  for (uint32_t id = base + 3; id <= base + 4; ++id) {
+    const xr_surface *sf = &((const x11_pixmap *)x_find(&srv, id)->obj)->surf;
+    pixbytes += (unsigned long)sf->stride * sf->h * (sf->depth == 16 ? 2u : 1u);
+  }
+  CHECK(pixbytes >= 30 * 7 * 2 + 13 * 5);
+  CHECK(stat_value("core.res_windows") == before[0] + 2);
+  CHECK(stat_value("core.res_pixmaps") == before[1] + 2);
+  CHECK(stat_value("core.res_gcs") == before[2] + 1);
+  CHECK(stat_value("core.pixmap_bytes") == before[3] + pixbytes);
+  CHECK(stat_value("core.properties") == before[4] + 1);
+  CHECK(stat_value("core.property_bytes") == before[5] + 5);
+  CHECK(stat_value("core.resources") == before[6] + 5);
+  x11_client_close(&srv, c);
+  for (int i = 0; i < 7; ++i) CHECK(stat_value(keys[i]) == before[i]);
+  x11_server_free(&srv);
+}
+
 int main(void) {
   for (int msb = 0; msb < 2; ++msb) {
     test_keyboard_map(msb);
@@ -433,6 +492,7 @@ int main(void) {
     test_access_control(msb);
     test_close_down(msb);
     test_close_down_reset(msb);
+    test_resource_counts(msb);
   }
   test_retain_cap();
   if (failures) {
