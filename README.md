@@ -17,10 +17,21 @@ security review beyond MIT-MAGIC-COOKIE-1 authentication and an authenticated OT
   2 UNSUPPORTED; the FAILs are ChangeHosts 1 and SetAccessControl 1 (host access changes are
   refused by design) and CopyPlane 1.
 - One TrueColor visual, depth 16 (RGB565); pixmap depths 16 and 1.
-- Fonts: a built-in 6×12 `fixed` font and the cursor font. No font server, no scalable fonts.
+- Fonts: a built-in 6×12 `fixed` font (characters 32–126) and the cursor font. No font server,
+  no scalable fonts, no ISO10646 (Unicode) font: xterm in a UTF-8 locale warns that it cannot
+  load one and draws a dashed box for each character the font lacks.
+- Lines: PolyRectangle supports every line style (solid, on-off and double dashes), cap and
+  join style, matching Xorg's pixels (`tools/xts/polyrect_diff.py`), with two deliberate
+  differences:
+  - each pixel of a rectangle is drawn once, as the protocol requires; Xorg draws some pixels
+    twice (corners, folded zero-width or zero-height rectangles), which shows only with
+    functions such as GXxor, GXand or GXor, where the results then differ;
+  - a GC keeps dash lists of up to 16 lengths; SetDashes accepts longer lists, but dashed
+    drawing with them answers BadImplementation (solid drawing with that GC still works).
 - Input: touch as the core pointer (Button1); two-finger scroll (Buttons 4/5) and tap
   (Button3); no keyboard input (a default US keymap and modifier map are reported to clients).
-- Not supported: extensions (XKB, RENDER, XTEST, SHAPE, …), wide/dashed lines and arcs drawn
+- Not supported: extensions (XKB, RENDER, XTEST, SHAPE, …), dashed lines in PolyLine,
+  PolySegment and PolyArc (BadImplementation), wide lines and arcs other than rectangles drawn
   pixel-exactly, CopyPlane from depth 16, clip masks over 64 rectangles.
 - Known open issues: a few pointer/keyboard grab cases; a two-finger tap held longer than
   300 ms is not a tap; an intermittent RTC-watchdog reset after a software restart (the panel
@@ -73,7 +84,8 @@ Both scripts check their toolchain versions and never flash.
 
 Over the USB serial port (115200 baud), one command per line: `WIFI_SSID`, `WIFI_PASS`,
 `COOKIE NEW` (prints a random MIT-MAGIC-COOKIE-1 once), `OTAKEY NEW`, `DISPLAY`, `MAXCLIENTS`,
-`STATUS`, `RESTART` (full list at the top of `esp32/x11_esp32/x11_esp32.ino`). Without a
+`STATUS`, `DIAG`, `RESTART`, and in the IDF64 profile `BACKLIGHT` (full list at the top of
+`esp32/x11_esp32/x11_esp32.ino`; `BACKLIGHT` is described below). Without a
 cookie nothing listens. Add the cookie to your `~/.Xauthority` with `xauth add`, then:
 
 ```sh
@@ -94,11 +106,64 @@ full 800×480 screen is about 750 KB on the network. The IDF64 profile can also 
 screenshot over the SPI link (`shot/`, the `WLSHOT*` messages); the host-side tool for that is
 not included in this repository.
 
+### Backlight level (IDF64 profile)
+
+The board's own microcontroller (I2C address 0x30) dims the backlight; the firmware sends it
+one command byte, from 0 (brightest) to 245 (darkest). Levels are given in percent, 10 to 100,
+mapped linearly (100 % → 0, 40 % → 147, 10 % → 221). The backlight cannot be switched off
+this way, and commands above 245 are never sent (246 and up are other board commands).
+
+```sh
+xprop -display PANEL_IP:0 -root -f _WOODLAND_BACKLIGHT 8s -set _WOODLAND_BACKLIGHT 40
+xprop -display PANEL_IP:0 -root -remove _WOODLAND_BACKLIGHT   # then the same value counts again
+```
+
+Over serial: `BACKLIGHT 40` sets the level, `BACKLIGHT` alone reports it.
+
+- **Root property `_WOODLAND_BACKLIGHT`:** type STRING, format 8, a decimal integer from 10 to
+  100 (spaces and a trailing NUL are allowed). Any authenticated client can set it. The
+  firmware checks the property every 250 ms and acts once per distinct value. Anything else
+  (wrong type or format, not a number, out of range) is rejected and changes nothing. Removing
+  the property changes nothing either.
+- **Writes:** at most one every 30 ms; after an unacknowledged write the firmware retries
+  after 1 s. Writes happen in the main loop, which also reads touch on the same I2C bus, so they
+  never overlap a touch read.
+- **Not stored:** every boot starts at 100 %.
+- **Unverified brightness:** the firmware knows only that the microcontroller acknowledged the
+  command. Nothing measures the light itself, so `lcd.backlight_physical` always reads
+  `unverified`; check the brightness by eye.
+- Only this board's microcontroller is supported. The Arduino profile has no runtime
+  backlight control.
+
+### Diagnostics
+
+`_WOODLAND_DIAG` (also the serial `DIAG` command) is plain `key=value` lines, generated at each
+read. Counters are cumulative since boot; `*_10s` values are maxima over the last 5–10 s. Among
+them:
+
+| Keys | Meaning | Builds |
+|---|---|---|
+| `core.res_windows`, `res_pixmaps`, `res_gcs`, `res_fonts`, `res_cursors`, `res_colormaps` | X11 resources in use, by type | all, host server included |
+| `core.pixmap_bytes` | pixel memory of all pixmaps | all |
+| `core.properties`, `core.property_bytes` | properties on all windows (the root included) and their data size | all |
+| `esp.heap_internal_allocated`, `_alloc_blocks`, `_free_blocks`; `esp.psram_allocated`, `_alloc_blocks`, `_free_blocks` | heap totals and fragmentation, from `heap_caps_get_info` | both firmware profiles |
+| `esp.app_version`, `esp.app_elf_sha256`, `esp.idf_version` | the running image: version string, first 8 bytes of its ELF SHA-256, ESP-IDF version | both firmware profiles |
+| `lcd.backlight_*` | requested and acknowledged level, its source (`boot`, `serial`, `x11`), I2C state, writes, errors, verdicts on `_WOODLAND_BACKLIGHT` | IDF64 |
+
+- **Cost:** these values are computed only when diagnostics are read: one walk over the
+  resource table and the window properties, and one walk over each heap. Nothing is added to
+  request handling, drawing, input or the LCD flush. Avoid polling diagnostics at a high rate on
+  a busy panel.
+- **Telling images apart:** `esp.app_version` does not change between builds of the same
+  release, so use `esp.app_elf_sha256` for that.
+- **Memory counts:** heap and PSRAM figures cover the whole firmware (Wi-Fi, lwIP, LCD), not
+  only the X11 server.
+
 ## Conformance testing
 
 `tools/xts/` builds XTS in a Debian container (`Dockerfile`) and runs it against Xvfb or the
-sanitizer host server (`run_xts.sh`); `core_diff.py`, `cmap_diff.py`, `font_diff.py` and
-`getimage_diff.py` compare replies with Xvfb.
+sanitizer host server (`run_xts.sh`); `core_diff.py`, `cmap_diff.py`, `font_diff.py`,
+`getimage_diff.py` and `polyrect_diff.py` compare replies and drawn pixels with Xvfb.
 
 ## License
 

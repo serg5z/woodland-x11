@@ -133,7 +133,7 @@ else
 fi
 grep -Fq -- '-DFD_SETSIZE=80' "$COMPILE_COMMANDS"
 grep -Fq -- '-DX11_SERVER_CLIENTS=64' "$COMPILE_COMMANDS"
-for define in X11_SPI_ECHO X11_SPI_X11 X11_SPI_SHOT X11_TOUCH_DIAG X11_PCLK; do
+for define in X11_SPI_ECHO X11_SPI_X11 X11_SPI_SHOT X11_TOUCH_DIAG X11_PCLK X11_BACKLIGHT; do
   grep -Fq -- "-D$define" "$COMPILE_COMMANDS"
 done
 sed -n '/Memory Type Usage Summary/,/Total image size/p' "$OUT/build.log" > "$OUT/memory-report.txt"

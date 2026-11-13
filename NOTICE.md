@@ -13,6 +13,7 @@ third-party material listed below, which keeps its own terms.
 | 6×12 bitmap font (served as `fixed` and `6x12`) | `core/x11_font_fixed.c` (generated) | Terminus Font, Copyright (c) 2010 Dimitar Toshkov Zhekov; converted from `Uni2-Terminus12x6.psf` (Debian console-setup) | SIL Open Font License 1.1: `licenses/OFL-Terminus.txt`. Reserved Font Name "Terminus Font": this converted copy is not distributed under that name. |
 | X cursor font glyphs | `core/x11_font_cursor.c` (generated) | X.Org font-cursor-misc 1.0.3 (`cursor.pcf`) | `licenses/X.Org-font-cursor-misc-COPYING.txt` |
 | X11 colour names and values | `core/x11_colors.c` (generated) | X.Org rgb 1.0.6 (`rgb.txt`) | `licenses/X.Org-rgb-COPYING.txt` (The Open Group and Oracle notices) |
+| Rectangle outline rules and arc spans (ported parts: the wide-line fast path for rectangles, `miLineArcI`, `miLineArcD`, the round cap/join clip and polygon edge setup, dash and join rules) | `core/x11_outline.c` | X.Org xserver `mi/miwideline.c`, `mi/mipolyrect.c` | `licenses/X.Org-xserver-mi-COPYING.txt` (The Open Group and Digital Equipment Corporation notices) |
 | twm configuration | `wm/twmrc` | X.Org twm 1.0.10 `system.twmrc`, fonts changed to "fixed" | `licenses/X.Org-twm-COPYING.txt` (The Open Group, Evans & Sutherland and other notices) |
 
 `esp32/x11_esp32/crowpanel_lcd.h` and `esp32/x11_esp32/crowpanel_board.h` contain the CrowPanel
