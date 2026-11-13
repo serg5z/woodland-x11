@@ -447,3 +447,81 @@ size_t pclk_diag_text(char *out, size_t cap) {
   return (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
 }
 #endif
+
+#ifdef X11_BACKLIGHT
+// ---------------------------------------------------------------- runtime backlight level
+// Serial BACKLIGHT <pct> and the root property _WOODLAND_BACKLIGHT (crowpanel_board.h). All
+// writes happen in loop(), the task that also reads touch on this I2C port, so they never
+// overlap a touch read. The level is not stored; every boot starts at 100 %.
+#include "src/x11_internal.h"  // the root window's properties (read only)
+
+namespace {
+crowpanel43_board::Backlight backlight;
+crowpanel43_board::BacklightProperty backlight_prop;
+const char *backlight_source = "boot";  // where the requested level came from
+struct BacklightIo {
+  bool write(uint8_t addr, uint8_t byte) {
+    Wire.beginTransmission(addr);
+    Wire.write(byte);
+    return Wire.endTransmission() == 0;
+  }
+};
+}  // namespace
+
+bool backlight_serial(const char *line) {
+  if (strncmp(line, "BACKLIGHT", 9) || (line[9] && line[9] != ' ')) return false;
+  const char *arg = line[9] ? line + 10 : nullptr;
+  if (!arg) {
+    Serial.printf("backlight %u%% (command %u, from %s), writes %lu, errors %lu%s\n", (unsigned)backlight.applied_pct,
+                  (unsigned)crowpanel43_board::backlight_command(backlight.applied_pct), backlight_source,
+                  (unsigned long)backlight.writes, (unsigned long)backlight.errors,
+                  backlight.pending ? ", a change is pending" : "");
+    return true;
+  }
+  char *end = nullptr;
+  long pct = strtol(arg, &end, 10);
+  while (end && (*end == ' ' || *end == '%')) ++end;
+  if (end == arg || (end && *end) || !crowpanel43_board::backlight_request(backlight, pct)) {
+    Serial.printf("BACKLIGHT <%d..%d> (percent; not stored, every boot starts at 100)\n",
+                  crowpanel43_board::BACKLIGHT_MIN_PCT, crowpanel43_board::BACKLIGHT_MAX_PCT);
+    return true;
+  }
+  backlight_source = "serial";
+  Serial.printf("backlight %ld%% requested (command %u)\n", pct, (unsigned)backlight.cmd);
+  return true;
+}
+
+void backlight_poll(x11_server *s) {
+  uint32_t now = millis();
+  uint8_t v = crowpanel43_board::backlight_poll_root(backlight, backlight_prop, s, now);
+  if (v != crowpanel43_board::BL_NONE) {
+    if (v == crowpanel43_board::BL_ACCEPTED) backlight_source = "x11";
+    Serial.printf("backlight: _WOODLAND_BACKLIGHT %s%s\n", crowpanel43_board::backlight_verdict_name(v),
+                  v == crowpanel43_board::BL_ACCEPTED ? "" : " (no change)");
+  }
+  BacklightIo io;
+  if (crowpanel43_board::backlight_service(backlight, io, now))
+    Serial.printf("backlight: command %u %s\n", (unsigned)backlight.cmd,
+                  backlight.failed ? "not acknowledged, retrying in 1 s" : "acknowledged");
+}
+
+// lcd.backlight_pct is the level the microcontroller acknowledged over I2C (boot: 100, sent
+// by crowpanel43_board::start()); nothing measures the light itself, so
+// lcd.backlight_physical stays "unverified": confirm the brightness by eye.
+size_t backlight_diag_text(char *out, size_t cap) {
+  const char *i2c = backlight.failed ? "failed" : backlight.writes ? "acked" : "boot";
+  int n = snprintf(out, cap,
+                   "lcd.backlight_pct=%u\nlcd.backlight_cmd=%u\nlcd.backlight_requested_pct=%u\n"
+                   "lcd.backlight_pending=%d\nlcd.backlight_writes=%lu\nlcd.backlight_errors=%lu\n"
+                   "lcd.backlight_source=%s\nlcd.backlight_i2c=%s\nlcd.backlight_physical=unverified\n"
+                   "lcd.backlight_x11_accepted=%lu\nlcd.backlight_x11_unchanged=%lu\nlcd.backlight_x11_rejected=%lu\n"
+                   "lcd.backlight_x11_last=%s\nlcd.backlight_x11_last_pct=%u\n",
+                   (unsigned)backlight.applied_pct, (unsigned)crowpanel43_board::backlight_command(backlight.applied_pct),
+                   (unsigned)backlight.pct, backlight.pending ? 1 : 0, (unsigned long)backlight.writes,
+                   (unsigned long)backlight.errors, backlight_source, i2c, (unsigned long)backlight_prop.accepted,
+                   (unsigned long)backlight_prop.unchanged, (unsigned long)backlight_prop.rejected,
+                   crowpanel43_board::backlight_verdict_name(backlight_prop.last), (unsigned)backlight_prop.last_pct);
+  if (n < 0) return 0;
+  return (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
+}
+#endif

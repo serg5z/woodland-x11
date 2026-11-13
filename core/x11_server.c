@@ -242,7 +242,31 @@ size_t x11_server_stats(const x11_server *s, char *out, size_t cap) {
                    (unsigned)s->oom, retained, X11_MAX_RETAINED, (unsigned long)s->retain_refused, (unsigned long)s->input_events, (unsigned long)s->input_dropped,
                    XR_POOL_REGIONS, s->pool.peak, (unsigned long)s->pool.failures);
   if (n < 0) return 0;
-  return (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
+  size_t used = (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
+  /* Resources by type, pixmap pixel memory and properties (all windows, the root included):
+   * one walk over the resource table, only when diagnostics are read. */
+  unsigned long by_type[8] = {0}, pixmap_bytes = 0, props = 0, prop_bytes = 0;
+  for (int i = 0; i < s->max_resources; ++i) {
+    const x11_resource *r = &s->resources[i];
+    if (r->type == X11_RES_FREE || r->type >= 8) continue;
+    ++by_type[r->type];
+    if (r->type == X11_RES_PIXMAP && r->obj) {
+      const xr_surface *sf = &((const x11_pixmap *)r->obj)->surf;
+      pixmap_bytes += (unsigned long)sf->stride * (unsigned long)sf->h * (sf->depth == 16 ? 2u : 1u);
+    } else if (r->type == X11_RES_WINDOW && r->obj) {
+      for (const x11_prop *pr = ((const x11_window *)r->obj)->props; pr; pr = pr->next) ++props, prop_bytes += pr->nbytes;
+    }
+  }
+  if (used + 1 < cap) {
+    n = snprintf(out + used, cap - used,
+                 "core.res_windows=%lu\ncore.res_pixmaps=%lu\ncore.res_gcs=%lu\ncore.res_fonts=%lu\n"
+                 "core.res_cursors=%lu\ncore.res_colormaps=%lu\ncore.pixmap_bytes=%lu\n"
+                 "core.properties=%lu\ncore.property_bytes=%lu\n",
+                 by_type[X11_RES_WINDOW], by_type[X11_RES_PIXMAP], by_type[X11_RES_GC], by_type[X11_RES_FONT],
+                 by_type[X11_RES_CURSOR], by_type[X11_RES_COLORMAP], pixmap_bytes, props, prop_bytes);
+    if (n > 0) used += (size_t)n < cap - used ? (size_t)n : cap - used - 1;
+  }
+  return used;
 }
 
 /* ---- save-sets ------------------------------------------------------------------------ */
