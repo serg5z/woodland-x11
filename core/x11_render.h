@@ -59,10 +59,12 @@ void xr_pool_release(int mark);
 typedef struct {
   unsigned long copy_fast_px, copy_slow_px;
   unsigned long image_fast_px, image_slow_px;  /* PutImage source pixels by path */
+  unsigned long text_fast_glyphs, text_slow_glyphs;  /* drawn glyphs by path */
 } xr_counters;
 extern xr_counters xr_count;
 extern int xr_copy_fast_enabled;  /* 1; tests set 0 to run the per-pixel reference path */
 extern int xr_image_fast_enabled; /* 1; tests set 0 to run the per-pixel PutImage path */
+extern int xr_text_fast_enabled;  /* 1; tests set 0 to run the per-pixel glyph path */
 
 void xr_region_set(xr_region *g, int x1, int y1, int x2, int y2);
 void xr_region_clear(xr_region *g);
@@ -136,6 +138,13 @@ void xr_copy_plane(const xr_surface *dst, const xr_region *clip, const xr_paint 
  * 0 when the caller must draw it pixel by pixel (the reference path). */
 int xr_put_image16(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y, int w, int h,
                    const uint8_t *data, size_t stride);
+/* Glyph rows. xr_bits_fast: 1 when points drawn with p on s are plain stores of p->fg (GXcopy,
+ * all planes, no fill style, depth 1 or 16), so a glyph may be drawn by rows. xr_bits_rows: for rows r < h,
+ * the pixels (x + k, y + r) (k < w <= 32) whose bit k of rows[r] is set (bits >= w ignored), clipped, set to fg;
+ * damage is marked per row from the first to the last pixel written, as point by point. */
+int xr_bits_fast(const xr_surface *s, const xr_paint *p);
+void xr_bits_rows(const xr_surface *s, const xr_region *clip, uint32_t fg, int x, int y, const uint32_t *rows, int w,
+                  int h);
 
 /* Fill a rectangle with a tile (same depth as dst), the tile's origin at (ox, oy). */
 void xr_fill_tile(const xr_surface *dst, const xr_region *clip, const xr_paint *p, const xr_surface *tile, int ox,
