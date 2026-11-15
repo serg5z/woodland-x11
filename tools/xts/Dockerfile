@@ -4,7 +4,7 @@
 FROM debian:bookworm
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential autoconf automake libtool pkg-config xutils-dev perl \
-    libx11-dev libxau-dev libxext-dev libxi-dev libxtst-dev libxt-dev libxmu-dev libxaw7-dev libxtrans-dev \
+    libx11-dev libxau-dev libxext-dev libxi-dev libxtst-dev libxt-dev libxmu-dev libxaw7-dev xtrans-dev \
     xvfb x11-utils x11-xserver-utils xfonts-utils xfonts-base xauth python3 gdb git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 # XTS master as of the 2026-11-09 campaign (6cf94400a09abecd6b86e4eb6441741acecd51f6)

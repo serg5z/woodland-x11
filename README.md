@@ -30,6 +30,23 @@ security review beyond MIT-MAGIC-COOKIE-1 authentication and an authenticated OT
     drawing with them answers BadImplementation (solid drawing with that GC still works).
 - Input: touch as the core pointer (Button1); two-finger scroll (Buttons 4/5) and tap
   (Button3); no keyboard input (a default US keymap and modifier map are reported to clients).
+- Applications (clients run against the host server and compared with Xvfb unless a panel run is
+  named):
+  - xterm (`fixed`; `top` and a UTF-8 locale tested), xclock, xeyes, xcalc and the Blackbox window
+    manager ran on the panel in a smoke test (2026-11-13). Known defects there: xeyes leaves stale
+    pixels after its window is moved, and some Blackbox window titles show as "...".
+  - XScreenSaver 6.14 hacks, started one by one with `-window` (neither the `xscreensaver` daemon
+    nor `xscreensaver-settings` is needed): `maze`, `munch` and `attraction` run and animate without
+    protocol errors on the host server; `maze` also runs on the CrowPanel (checked by hand;
+    not part of the recorded test suite). Of 32 further 2D hacks run for 11 s each on the host,
+    31 stayed running; `ripples` exits on Xvfb as well. `phosphor` exits (BadImplementation): its
+    clip-mask bitmap needs more than 64 rectangles. Not working or not tested: OpenGL hacks (no GLX),
+    hacks that need a desktop image (nothing supplies one), and the `xscreensaver-settings` preview
+    (it starts no hack, on Xvfb either). This is not full XScreenSaver compatibility.
+  - GTK 3 programs that draw odd-width 16-bit images through Cairo 1.18.4's XCB path (for example
+    `xscreensaver-settings`) exit with `BadLength` on PutImage: Cairo sends the rows without the
+    scanline padding the protocol requires, and Xvfb rejects the same request. The server's reply is
+    correct; a small Cairo patch fixes it (not yet upstream).
 - Not supported: extensions (XKB, RENDER, XTEST, SHAPE, …), dashed lines in PolyLine,
   PolySegment and PolyArc (BadImplementation), wide lines and arcs other than rectangles drawn
   pixel-exactly, CopyPlane from depth 16, clip masks over 64 rectangles.
