@@ -2049,18 +2049,19 @@ static size_t put_image(ctx *x) {
   size_t e = resolve(x, U32(4), U32(8), &t, &g, 0);
   if (e) return e;
   if (format > 2) return error(x, X11_BAD_VALUE, format);
+  /* Match rules (core protocol, as X.Org checks them): XYBitmap has depth 1, XYPixmap and
+   * ZPixmap the drawable's depth; ZPixmap has left-pad 0, the bitmap formats a left-pad below
+   * the bitmap-format-scanline-pad of the setup (32). */
+  if (format == 0 ? depth != 1 : depth != t.depth) return error(x, X11_BAD_MATCH, depth);
+  if (format == 2 ? left != 0 : left >= 32) return error(x, X11_BAD_MATCH, left);
   size_t row, need;
   int bits = format == 2 && depth == 16;
-  if (format == 0 || depth == 1) {           /* one bit per pixel, LSBFirst, pad 32 */
-    if (format == 0 ? depth != 1 : depth != t.depth) return error(x, X11_BAD_MATCH, depth);
+  if (format == 0 || depth == 1)             /* one bit per pixel, LSBFirst, pad 32 */
     row = x_pad4(((size_t)w + left + 7) / 8);
-  } else if (bits) {                         /* ZPixmap depth 16: 2 bytes per pixel, LSB */
-    if (t.depth != 16) return error(x, X11_BAD_MATCH, depth);
-    if (left) return error(x, X11_BAD_MATCH, left);
+  else if (bits)                             /* ZPixmap depth 16: 2 bytes per pixel, LSB */
     row = x_pad4((size_t)w * 2);
-  } else {
-    return error(x, X11_BAD_IMPLEMENTATION, depth);  /* XYPixmap of depth 16 */
-  }
+  else
+    return error(x, X11_BAD_IMPLEMENTATION, depth);  /* XYPixmap of depth 16: not supported */
   need = row * (size_t)h;
   if (x->len < 24 + need || x->len > 24 + x_pad4(need) + 3) return error(x, X11_BAD_LENGTH, 0);
   xr_paint p = paint_of(g, t.depth);
