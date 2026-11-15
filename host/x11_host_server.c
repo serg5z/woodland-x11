@@ -5,7 +5,7 @@
  *
  *   x11_host_server [-d DISPLAY] [--cookie HEX32] [--once] [-q] [-t] [--png PATH] [--input]
  *                   [--clients N] [--budget-mb MB] [--outq-kb KB] [--resources N] [--client-resources N]
- *                   [--request-budget-us US]
+ *                   [--request-budget-us US] [--sndbuf-kb KB]
  *
  * Runs the portable core (core/x11_setup.c, core/x11_server.c: the code that will run on
  * the ESP32-S3) behind POSIX sockets, through the same transport as the ESP32 (net/x11_net.c):
@@ -18,6 +18,9 @@
  *   --resources N          resource table (all clients, default 4096)
  *   --client-resources N   per-client resource quota (default 0: none)
  *   --request-budget-us US request processing per loop pass (default 0: unlimited)
+ *   --sndbuf-kb KB         SO_SNDBUF of each client socket (default 0: the OS default). Linux can buffer
+ *                          megabytes per socket on loopback and so hides backpressure; the backpressure
+ *                          tests set a small value to get the same behaviour on every OS.
  *   --copy-reference       CopyArea through the per-pixel reference path (benchmark baseline)
  *   --image-reference      PutImage through the per-pixel reference path (benchmark baseline)
  *   --text-reference       text glyphs through the per-pixel reference path (benchmark baseline)
@@ -336,7 +339,7 @@ static long arg_num(const char *v, long lo, long hi, const char *name) {
 
 int main(int argc, char **argv) {
   int display = 99, once = 0, input = 0;
-  long clients = 8, budget_mb = 64, outq_kb = 256, resources = 4096, client_resources = 0, request_budget_us = 0;
+  long clients = 8, budget_mb = 64, outq_kb = 256, resources = 4096, client_resources = 0, request_budget_us = 0, sndbuf_kb = 0;
   const char *png = NULL, *viewer_socket = NULL;
   static uint8_t cookie[X11_COOKIE_LEN];
   x11_server_config cfg;
@@ -365,9 +368,10 @@ int main(int argc, char **argv) {
       client_resources = arg_num(argv[++i], 0, 65535, "--client-resources");
     else if (!strcmp(argv[i], "--request-budget-us") && i + 1 < argc)
       request_budget_us = arg_num(argv[++i], 0, 10000000, "--request-budget-us");
+    else if (!strcmp(argv[i], "--sndbuf-kb") && i + 1 < argc) sndbuf_kb = arg_num(argv[++i], 0, 4096, "--sndbuf-kb");
     else {
       fprintf(stderr, "usage: %s [-d DISPLAY] [--cookie HEX32] [--once] [-q] [-t] [--png PATH] [--viewer-socket PATH] [--input] [--copy-reference] [--image-reference] [--text-reference] [--reset] [--clients N] "
-                      "[--budget-mb MB] [--outq-kb KB] [--resources N] [--client-resources N] [--request-budget-us US]\n",
+                      "[--budget-mb MB] [--outq-kb KB] [--resources N] [--client-resources N] [--request-budget-us US] [--sndbuf-kb KB]\n",
               argv[0]);
       return 2;
     }
@@ -466,6 +470,10 @@ int main(int argc, char **argv) {
         if (fd < 0) break;
         fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+        if (sndbuf_kb) {
+          int sb = (int)(sndbuf_kb * 1024);
+          setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sb, sizeof(sb));
+        }
         x11_net_accept(&net, fd, ntohl(peer.sin_addr.s_addr), ntohs(peer.sin_port));
         ++served;
       }
