@@ -233,6 +233,78 @@ class HostServerTest(unittest.TestCase):
         self.assertEqual((focus[0], struct.unpack("<H", focus[2:4])[0]), (1, 5))
         s.close()
 
+    def test_putimage_length_and_match_rules_as_xvfb(self):
+        # Every case below was sent to Xvfb (depth 16, 32-bit scanline pad) and answered as
+        # asserted here; both byte orders. Case 1 is the request xscreensaver-settings (GTK3 /
+        # Cairo) sends for its preview: 445x4 ZPixmap depth 16 with unpadded 890-byte rows,
+        # 3,584 bytes, where the protocol needs 892-byte rows (3,592 bytes).
+        srv = self.start()
+        pad4 = lambda n: (n + 3) & ~3
+        for msb in (False, True):
+            e = ">" if msb else "<"
+            s, setup = connect(srv.port, msb)
+            root, base = setup["screens"][0]["root"], setup["resource_id_base"]
+            gc, pix, gc1 = base, base + 1, base + 2
+            s.sendall(struct.pack(e + "BxHIII", 55, 4, gc, root, 0))
+            s.sendall(struct.pack(e + "BBHIIHH", 53, 1, 4, pix, root, 64, 16))
+            s.sendall(struct.pack(e + "BxHIII", 55, 4, gc1, pix, 0))
+            seq = 3
+
+            def put(fmt, w, h, depth, left, nbytes, onto_pixmap=False):
+                nonlocal seq
+                payload = bytes((i * 37) & 0xFF for i in range(nbytes))
+                d, g = (pix, gc1) if onto_pixmap else (root, gc)
+                body = struct.pack(e + "IIHHhhBBxx", d, g, w, h, 0, 0, left, depth) + payload
+                s.sendall(struct.pack(e + "BBH", 72, fmt, (4 + len(body)) // 4) + body)
+                seq += 1
+                s.sendall(struct.pack(e + "BxH", 43, 1))
+                seq += 1
+                m = recv_exact(s, 32)
+                if m[0] == 0:  # an error, then the GetInputFocus reply
+                    self.assertEqual((struct.unpack(e + "H", m[2:4])[0], m[10]), (seq - 1, 72))
+                    recv_exact(s, 32)
+                    return m[1]
+                self.assertEqual(struct.unpack(e + "H", m[2:4])[0], seq)
+                return 0
+
+            z = lambda w, h: pad4(2 * w) * h
+            xy = lambda w, h, left: pad4((w + left + 7) // 8) * h
+            BAD_VALUE, BAD_MATCH, BAD_LENGTH = 2, 8, 16
+            cases = [
+                ("xscreensaver 445x4 Z16 unpadded rows", (2, 445, 4, 16, 0, 2 * 445 * 4), BAD_LENGTH),
+                ("445x4 Z16 padded rows", (2, 445, 4, 16, 0, z(445, 4)), 0),
+                ("445x4 Z16, 4 bytes short", (2, 445, 4, 16, 0, z(445, 4) - 4), BAD_LENGTH),
+                ("445x4 Z16, 4 bytes extra", (2, 445, 4, 16, 0, z(445, 4) + 4), BAD_LENGTH),
+                ("444x4 Z16 (no padding needed)", (2, 444, 4, 16, 0, z(444, 4)), 0),
+                ("445x1 Z16 (one row)", (2, 445, 1, 16, 0, pad4(890)), 0),
+                ("1x7 Z16 unpadded", (2, 1, 7, 16, 0, pad4(14)), BAD_LENGTH),
+                ("0x5 Z16", (2, 0, 5, 16, 0, 0), 0),
+                ("Z16 leftPad 1", (2, 445, 4, 16, 1, z(445, 4)), BAD_MATCH),
+                ("Z24 on a depth-16 window", (2, 445, 4, 24, 0, pad4(4 * 445) * 4), BAD_MATCH),
+                ("XYPixmap depth 24 on a depth-16 window", (1, 445, 4, 24, 0, xy(445, 4, 0) * 24), BAD_MATCH),
+                ("XYBitmap depth 16", (0, 13, 5, 16, 0, xy(13, 5, 0)), BAD_MATCH),
+                ("XYBitmap leftPad 3", (0, 13, 5, 1, 3, xy(13, 5, 3)), 0),
+                ("XYBitmap leftPad 3, rows of 2 B", (0, 13, 5, 1, 3, pad4(2 * 5)), BAD_LENGTH),
+                ("XYBitmap leftPad 31", (0, 13, 5, 1, 31, xy(13, 5, 31)), 0),
+                ("XYBitmap leftPad 32", (0, 13, 5, 1, 32, xy(13, 5, 32)), BAD_MATCH),
+                ("XYBitmap leftPad 200", (0, 13, 5, 1, 200, xy(13, 5, 200)), BAD_MATCH),
+                ("format 3", (3, 13, 5, 16, 0, z(13, 5)), BAD_VALUE),
+            ]
+            for name, args, want in cases:
+                self.assertEqual(put(*args), want, f"{name} (msb={msb})")
+            onto = [
+                ("Z1 onto a depth-1 pixmap", (2, 21, 6, 1, 0, xy(21, 6, 0)), 0),
+                ("Z1 leftPad 3 onto a depth-1 pixmap", (2, 21, 6, 1, 3, xy(21, 6, 3)), BAD_MATCH),
+                ("XYPixmap leftPad 3 onto a depth-1 pixmap", (1, 21, 6, 1, 3, xy(21, 6, 3)), 0),
+                ("XYPixmap leftPad 32 onto a depth-1 pixmap", (1, 13, 5, 1, 32, xy(13, 5, 32)), BAD_MATCH),
+                ("XYBitmap leftPad 5 onto a depth-1 pixmap", (0, 21, 6, 1, 5, xy(21, 6, 5)), 0),
+                ("Z16 onto a depth-1 pixmap", (2, 21, 6, 16, 0, z(21, 6)), BAD_MATCH),
+                ("Z1 4 bytes short onto a depth-1 pixmap", (2, 21, 6, 1, 0, xy(21, 6, 0) - 4), BAD_LENGTH),
+            ]
+            for name, args, want in onto:
+                self.assertEqual(put(*args, onto_pixmap=True), want, f"{name} (msb={msb})")
+            s.close()
+
     def test_length_zero_is_bad_length_and_client_stays(self):
         # Without BIG-REQUESTS a length of 0 is just too short: BadLength for the 4-byte header
         # (XTS <Request>-2 for one-word requests), and the connection goes on.
