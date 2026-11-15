@@ -576,6 +576,49 @@ int xr_put_image16(const xr_surface *s, const xr_region *clip, const xr_paint *p
   return 1;
 }
 
+/* ---- glyph rows ---------------------------------------------------------------------------- */
+
+int xr_text_fast_enabled = 1;
+
+int xr_bits_fast(const xr_surface *s, const xr_paint *p) {
+  uint32_t full = s->depth == 1 ? 1u : 0xFFFFu;
+  return xr_text_fast_enabled && !fill && p->function == 3 &&  /* depth is 1 or 16 */
+         (p->plane_mask & full) == full;
+}
+
+#if defined(__GNUC__)
+#define CTZ32(v) __builtin_ctz(v)  /* v != 0 */
+#define CLZ32(v) __builtin_clz(v)
+#else
+static int CTZ32(uint32_t v) { int n = 0; while (!(v & 1u)) v >>= 1, ++n; return n; }
+static int CLZ32(uint32_t v) { int n = 0; while (!(v & 0x80000000u)) v <<= 1, ++n; return n; }
+#endif
+
+void xr_bits_rows(const xr_surface *s, const xr_region *clip, uint32_t fg, int x, int y, const uint32_t *rows, int w,
+                  int h) {
+  int gx1 = x < 0 ? 0 : x, gx2 = x + w > s->w ? s->w : x + w;
+  int gy1 = y < 0 ? 0 : y, gy2 = y + h > s->h ? s->h : y + h;
+  if (gx1 >= gx2 || gy1 >= gy2) return;
+  for (int c = 0; c < clip->n; ++c) {
+    const xr_rect *r = &clip->r[c];
+    int ax = gx1 > r->x1 ? gx1 : r->x1, bx = gx2 < r->x2 ? gx2 : r->x2;
+    int ay = gy1 > r->y1 ? gy1 : r->y1, by = gy2 < r->y2 ? gy2 : r->y2;
+    if (ax >= bx || ay >= by) continue;
+    int sh = ax - x, n = bx - ax;  /* 0 <= sh < w <= 32 */
+    uint32_t keep = n < 32 ? (1u << n) - 1u : 0xFFFFFFFFu;
+    for (int yy = ay; yy < by; ++yy) {
+      uint32_t m = rows[yy - y] >> sh & keep;
+      if (!m) continue;
+      mark(s, ax + CTZ32(m), yy, ax + 32 - CLZ32(m));
+      size_t at = (size_t)yy * (size_t)s->stride + (size_t)ax;
+      do {
+        if (s->depth == 16) ((uint16_t *)s->pix)[at + (size_t)CTZ32(m)] = (uint16_t)fg;
+        else ((uint8_t *)s->pix)[at + (size_t)CTZ32(m)] = (uint8_t)(fg & 1u);
+      } while (m &= m - 1u);
+    }
+  }
+}
+
 /* ---- tiles -------------------------------------------------------------------------------- */
 
 static int mod(int a, int m) {

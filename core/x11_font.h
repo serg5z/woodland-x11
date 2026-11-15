@@ -69,7 +69,16 @@ int x11_font_slot(const x11_font *f, int c);
 const x11_glyph_metrics *x11_font_slot_metrics(const x11_font *f, int slot);
 /* Metrics of character c, or NULL if the font does not define it. */
 const x11_glyph_metrics *x11_font_glyph(const x11_font *f, int c);
+/* The same, also giving the character's slot. */
+const x11_glyph_metrics *x11_font_glyph_at(const x11_font *f, int c, int *slot);
 /* Pixel (x, y) of the character in `slot`, which must exist: x from 0 at lsb, y from 0 at
  * the top (ascent + descent rows). */
 int x11_font_pixel(const x11_font *f, int slot, int x, int y);
+/* 1 when x11_font_rows can deliver glyph rows of w pixels in this font's format: up to 32, or
+ * up to 8 for the 6x12 byte table. */
+static inline int x11_font_rows_ok(const x11_font *f, int w) { return w <= (!f->bits && !f->index ? 8 : 32); }
+/* Rows y0 .. y0 + n - 1 of the character in `slot` as masks: bit k of out[r] =
+ * x11_font_pixel(f, slot, k, y0 + r) for k < w = rsb - lsb (x11_font_rows_ok(f, w) must hold);
+ * bits at or above w are unspecified. */
+void x11_font_rows(const x11_font *f, int slot, int y0, int n, uint32_t *out);
 #endif

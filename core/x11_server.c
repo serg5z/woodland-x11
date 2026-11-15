@@ -2328,11 +2328,9 @@ typedef struct {
 static int text_at(const text *t, size_t i) { return t->wide ? t->s[2 * i] << 8 | t->s[2 * i + 1] : t->s[i]; }
 
 /* An undefined character is the default character, or nothing if that is undefined too. */
-static const x11_glyph_metrics *text_glyph(const x11_font *f, int c, int *used) {
-  const x11_glyph_metrics *m = x11_font_glyph(f, c);
-  if (!m) m = x11_font_glyph(f, c = f->default_char);
-  *used = c;
-  return m;
+static const x11_glyph_metrics *text_glyph(const x11_font *f, int c, int *slot) {
+  const x11_glyph_metrics *m = x11_font_glyph_at(f, c, slot);
+  return m ? m : x11_font_glyph_at(f, f->default_char, slot);
 }
 
 typedef struct {
@@ -2345,8 +2343,8 @@ static extents text_extents(const x11_font *f, const text *t) {
   extents e = {0, 0, 0, 0, 0};
   int first = 1;
   for (size_t i = 0; i < t->n; ++i) {
-    int c;
-    const x11_glyph_metrics *m = text_glyph(f, text_at(t, i), &c);
+    int slot;
+    const x11_glyph_metrics *m = text_glyph(f, text_at(t, i), &slot);
     if (!m) continue;
     int32_t l = e.width + m->lsb, r = e.width + m->rsb;
     if (first || l < e.left) e.left = l;
@@ -2361,14 +2359,30 @@ static extents text_extents(const x11_font *f, const text *t) {
 
 /* Draws the glyphs at pen position x0 on the baseline; returns the new pen position. */
 static int draw_glyphs(target *tg, const xr_paint *p, const x11_font *f, int x0, int baseline, const text *t) {
+  /* Plain stores of fg (ImageText, or PolyText with GXcopy, all planes, no fill style): each
+   * glyph by rows, clipped once, skipped when invisible. Otherwise point by point (the reference). */
+  int fast = xr_bits_fast(tg->surf, p);
   for (size_t i = 0; i < t->n; ++i) {
-    int c;
-    const x11_glyph_metrics *m = text_glyph(f, text_at(t, i), &c);
+    int slot;
+    const x11_glyph_metrics *m = text_glyph(f, text_at(t, i), &slot);
     if (!m) continue;
-    int slot = x11_font_slot(f, c);
-    for (int ry = 0; ry < m->ascent + m->descent; ++ry)
-      for (int rx = 0; rx < m->rsb - m->lsb; ++rx)
-        if (x11_font_pixel(f, slot, rx, ry)) xr_point_set(tg->surf, tg->clip, p, x0 + m->lsb + rx, baseline - m->ascent + ry);
+    int w = m->rsb - m->lsb, h = m->ascent + m->descent, gx = x0 + m->lsb, gy = baseline - m->ascent;
+    if (fast && x11_font_rows_ok(f, w)) {
+      ++xr_count.text_fast_glyphs;
+      if (w > 0 && h > 0 && gx < tg->surf->w && gy < tg->surf->h && gx + w > 0 && gy + h > 0) {  /* on the surface */
+        uint32_t rows[8];  /* up to 8 rows at a time */
+        for (int r0 = 0; r0 < h; r0 += 8) {
+          int k = h - r0 < 8 ? h - r0 : 8;
+          x11_font_rows(f, slot, r0, k, rows);
+          xr_bits_rows(tg->surf, tg->clip, p->fg, gx, gy + r0, rows, w, k);
+        }
+      }
+    } else {
+      ++xr_count.text_slow_glyphs;
+      for (int ry = 0; ry < h; ++ry)
+        for (int rx = 0; rx < w; ++rx)
+          if (x11_font_pixel(f, slot, rx, ry)) xr_point_set(tg->surf, tg->clip, p, gx + rx, gy + ry);
+    }
     x0 += m->width;
   }
   return x0;
