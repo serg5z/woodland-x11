@@ -1,0 +1,43 @@
+# Builds the host server and the C unit tests, then runs `make test` (C tests under
+# ASan/UBSan, plus the Python end-to-end tests against the host server).
+# No firmware (ESP-IDF), no hardware, no XTS.
+name: Host tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          # build-essential (gcc, g++, make, libasan/libubsan) and python3 are already on the
+          # runner image; x11-utils provides xdpyinfo for the protocol-compatibility tests.
+          sudo apt-get install -y --no-install-recommends build-essential python3 x11-utils
+
+      - name: Show tool versions
+        run: |
+          cc --version | head -1
+          c++ --version | head -1
+          make --version | head -1
+          python3 --version
+
+      - name: Clean build
+        run: |
+          make clean
+          make all
+
+      - name: Run tests
+        run: make test

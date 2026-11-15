@@ -137,7 +137,7 @@ class HostServerTest(unittest.TestCase):
             s.close()
 
     def test_getimage_stream_backpressure_other_client_and_event_order(self):
-        srv = self.start("--clients", "6", "--budget-mb", "4", "--outq-kb", "96")
+        srv = self.start("--clients", "6", "--budget-mb", "4", "--outq-kb", "96", "--sndbuf-kb", "4")
         first, setup = connect(srv.port, False)
         root = setup["screens"][0]["root"]
         first.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
@@ -404,7 +404,7 @@ class HostServerTest(unittest.TestCase):
         return sec
 
     def test_event_overflow_closes_only_the_silent_client(self):
-        srv = self.start("-q")
+        srv = self.start("-q", "--sndbuf-kb", "4")
         silent, rep = connect(srv.port)
         root = rep["screens"][0]["root"]
         # ChangeWindowAttributes(root, event-mask = PropertyChangeMask), then never read again

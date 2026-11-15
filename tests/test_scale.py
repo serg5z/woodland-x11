@@ -195,7 +195,7 @@ class ScaleTest(unittest.TestCase):
         self.baseline_ok(mon, base, "after the burst")
 
     def test_slow_readers_do_not_stall_others(self):
-        srv = self.start("--clients", "16", "--outq-kb", "128")
+        srv = self.start("--clients", "16", "--outq-kb", "128", "--sndbuf-kb", "4")
         mon = Raw(srv.port)
         base = diag(mon)
         slow = []
