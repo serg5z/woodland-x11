@@ -19,6 +19,7 @@
  *   --client-resources N   per-client resource quota (default 0: none)
  *   --request-budget-us US request processing per loop pass (default 0: unlimited)
  *   --copy-reference       CopyArea through the per-pixel reference path (benchmark baseline)
+ *   --image-reference      PutImage through the per-pixel reference path (benchmark baseline)
  *   --reset                server reset when the last client leaves (protocol "Connection Close":
  *                          atoms, root properties, device settings, focus, root background)
  * Diagnostics: the root property _WOODLAND_DIAG (xprop -root _WOODLAND_DIAG), as on the
@@ -226,11 +227,11 @@ static size_t diag(void *ctx, char *out, size_t cap) {
   getrusage(RUSAGE_SELF, &ru);
   int n = snprintf(out, cap,
                    "host.uptime_ms=%llu\nhost.cpu_user_ms=%ld\nhost.cpu_sys_ms=%ld\nhost.maxrss_bytes=%ld\n"
-                   "host.server_struct=%zu\nhost.net_struct=%zu\n",
+                   "host.server_struct=%zu\nhost.net_struct=%zu\nhost.image_fast_px=%lu\nhost.image_slow_px=%lu\n",
                    (unsigned long long)((mono_us() - start_us) / 1000u),
                    (long)(ru.ru_utime.tv_sec * 1000 + ru.ru_utime.tv_usec / 1000),
                    (long)(ru.ru_stime.tv_sec * 1000 + ru.ru_stime.tv_usec / 1000), maxrss_bytes(&ru),
-                   sizeof(x11_server), sizeof(x11_net));
+                   sizeof(x11_server), sizeof(x11_net), xr_count.image_fast_px, xr_count.image_slow_px);
   size_t used = n < 0 ? 0 : (size_t)n < cap ? (size_t)n : cap - 1;
   used += x11_server_stats(&server, out + used, cap - used);
   used += x11_net_stats(&net, out + used, cap - used);
@@ -350,6 +351,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--viewer-socket") && i + 1 < argc) viewer_socket = argv[++i];
     else if (!strcmp(argv[i], "--input")) input = 1;
     else if (!strcmp(argv[i], "--copy-reference")) xr_copy_fast_enabled = 0;  /* benchmarks: the per-pixel copy */
+    else if (!strcmp(argv[i], "--image-reference")) xr_image_fast_enabled = 0;  /* benchmarks: the per-pixel PutImage */
     else if (!strcmp(argv[i], "--reset")) cfg.reset_on_last_close = 1;  /* as X.Org without -noreset */
     else if (!strcmp(argv[i], "--clients") && i + 1 < argc) clients = arg_num(argv[++i], 1, X11_SERVER_CLIENTS, "--clients");
     else if (!strcmp(argv[i], "--budget-mb") && i + 1 < argc) budget_mb = arg_num(argv[++i], 1, 4096, "--budget-mb");
@@ -361,7 +363,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--request-budget-us") && i + 1 < argc)
       request_budget_us = arg_num(argv[++i], 0, 10000000, "--request-budget-us");
     else {
-      fprintf(stderr, "usage: %s [-d DISPLAY] [--cookie HEX32] [--once] [-q] [-t] [--png PATH] [--viewer-socket PATH] [--input] [--copy-reference] [--reset] [--clients N] "
+      fprintf(stderr, "usage: %s [-d DISPLAY] [--cookie HEX32] [--once] [-q] [-t] [--png PATH] [--viewer-socket PATH] [--input] [--copy-reference] [--image-reference] [--reset] [--clients N] "
                       "[--budget-mb MB] [--outq-kb KB] [--resources N] [--client-resources N] [--request-budget-us US]\n",
               argv[0]);
       return 2;

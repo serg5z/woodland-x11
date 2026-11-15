@@ -541,6 +541,41 @@ void xr_copy_plane(const xr_surface *dst, const xr_region *clip, const xr_paint 
   copy_rows(dst, clip, p, src, sx, sy, w, h, dx, dy, 1, opaque);
 }
 
+/* ---- images ------------------------------------------------------------------------------- */
+
+int xr_image_fast_enabled = 1;
+
+int xr_put_image16(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y, int w, int h,
+                   const uint8_t *data, size_t stride) {
+  if (!xr_image_fast_enabled || fill || s->depth != 16 || p->function != 3 || (p->plane_mask & 0xFFFFu) != 0xFFFFu)
+    return 0;
+  static const uint16_t one = 1;
+  int little = *(const uint8_t *)&one == 1;  /* the image's byte order is the framebuffer's */
+  for (int r = 0; r < h; ++r) {
+    int yy = y + r;
+    if (yy < 0 || yy >= s->h) continue;
+    const uint8_t *src = data + (size_t)r * stride;
+    uint16_t *d = (uint16_t *)s->pix + (size_t)yy * (size_t)s->stride;
+    for (int c = 0; c < clip->n; ++c) {
+      const xr_rect *cr = &clip->r[c];
+      if (yy < cr->y1 || yy >= cr->y2) continue;
+      int a = x > cr->x1 ? x : cr->x1, b = x + w < cr->x2 ? x + w : cr->x2;
+      if (a < 0) a = 0;
+      if (b > s->w) b = s->w;
+      if (a >= b) continue;
+      const uint8_t *sp = src + (size_t)(a - x) * 2;
+      if (little) {
+        memcpy(d + a, sp, (size_t)(b - a) * 2);
+      } else {
+        for (int i = a; i < b; ++i, sp += 2) d[i] = (uint16_t)(sp[0] | sp[1] << 8);
+      }
+      mark(s, a, yy, b);
+    }
+  }
+  xr_count.image_fast_px += (unsigned long)w * (unsigned long)h;
+  return 1;
+}
+
 /* ---- tiles -------------------------------------------------------------------------------- */
 
 static int mod(int a, int m) {

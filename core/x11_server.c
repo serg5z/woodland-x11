@@ -2066,6 +2066,11 @@ static size_t put_image(ctx *x) {
   if (x->len < 24 + need || x->len > 24 + x_pad4(need) + 3) return error(x, X11_BAD_LENGTH, 0);
   xr_paint p = paint_of(g, t.depth);
   const uint8_t *data = x->q + 24;
+  if (bits && xr_put_image16(t.surf, t.clip, &p, t.ox + dx, t.oy + dy, w, h, data, row)) {
+    touched(x, &t);
+    return 0;
+  }
+  xr_count.image_slow_px += (unsigned long)w * (unsigned long)h;
   for (int yy = 0; yy < h; ++yy) {
     const uint8_t *r = data + row * (size_t)yy;
     for (int xx = 0; xx < w; ++xx) {

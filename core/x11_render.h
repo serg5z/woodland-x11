@@ -58,9 +58,11 @@ void xr_pool_release(int mark);
 /* Work counters (tests, diagnostics): pixels copied by the span fast path / per pixel. */
 typedef struct {
   unsigned long copy_fast_px, copy_slow_px;
+  unsigned long image_fast_px, image_slow_px;  /* PutImage source pixels by path */
 } xr_counters;
 extern xr_counters xr_count;
 extern int xr_copy_fast_enabled;  /* 1; tests set 0 to run the per-pixel reference path */
+extern int xr_image_fast_enabled; /* 1; tests set 0 to run the per-pixel PutImage path */
 
 void xr_region_set(xr_region *g, int x1, int y1, int x2, int y2);
 void xr_region_clear(xr_region *g);
@@ -128,6 +130,12 @@ void xr_copy(const xr_surface *dst, const xr_region *clip, const xr_paint *p, co
  * opaque 0: only 1-bits are drawn (stipple-like). */
 void xr_copy_plane(const xr_surface *dst, const xr_region *clip, const xr_paint *p, const xr_surface *src, int sx,
                    int sy, int w, int h, int dx, int dy, int opaque);
+/* PutImage ZPixmap depth 16 (2 bytes per pixel, least significant byte first, rows `stride`
+ * bytes apart) at (x, y), clipped. Only the common case: a depth-16 surface, GXcopy, all planes
+ * and no fill style. Returns 1 when drawn (one copy and one damage mark per clipped row span),
+ * 0 when the caller must draw it pixel by pixel (the reference path). */
+int xr_put_image16(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y, int w, int h,
+                   const uint8_t *data, size_t stride);
 
 /* Fill a rectangle with a tile (same depth as dst), the tile's origin at (ox, oy). */
 void xr_fill_tile(const xr_surface *dst, const xr_region *clip, const xr_paint *p, const xr_surface *tile, int ox,
