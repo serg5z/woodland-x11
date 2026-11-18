@@ -94,7 +94,9 @@ void xw_visible(const x11_window *w, xr_region *out, int include_inferiors) {
 }
 
 xr_surface *xw_tile_copy(x11_server *s, const xr_surface *src) {
-  size_t bpp = src->depth == 16 ? 2 : 1, row = (size_t)src->w * bpp;
+  size_t bpp = src->depth == 16 ? 2 : 1;
+  size_t stride = src->packed1 ? ((size_t)src->w + 7u) / 8u : (size_t)src->w;
+  size_t row = src->packed1 ? stride : (size_t)src->w * bpp;
   xr_surface *t = (xr_surface *)x_alloc(s, sizeof(xr_surface));
   void *pix = x_alloc(s, row * (size_t)src->h);
   if (!t || !pix) {
@@ -103,8 +105,10 @@ xr_surface *xw_tile_copy(x11_server *s, const xr_surface *src) {
     return 0;
   }
   for (int y = 0; y < src->h; ++y)
-    memcpy((uint8_t *)pix + row * (size_t)y, (const uint8_t *)src->pix + (size_t)src->stride * bpp * (size_t)y, row);
-  t->pix = pix, t->w = src->w, t->h = src->h, t->stride = src->w, t->depth = src->depth, t->dmg = 0;
+    memcpy((uint8_t *)pix + row * (size_t)y, (const uint8_t *)src->pix + (size_t)src->stride * (src->packed1 ? 1u : bpp) * (size_t)y, row);
+  t->pix = pix, t->w = src->w, t->h = src->h, t->stride = (int)stride, t->depth = src->depth, t->dmg = 0;
+  t->packed1 = src->packed1;
+  t->ops = 0, t->ctx = 0;
   return t;
 }
 

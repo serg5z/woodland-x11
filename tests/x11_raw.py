@@ -15,6 +15,9 @@ class Raw:
     def __init__(self, port: int, host: str = "127.0.0.1", auth_name: bytes = b"", auth_data: bytes = b""):
         self.sock, setup = connect(port, auth_name=auth_name, auth_data=auth_data, host=host)
         assert setup["status"] == "success", setup
+        self.root = setup["screens"][0]["root"]
+        self.screen_width = setup["screens"][0]["width_px"]
+        self.screen_height = setup["screens"][0]["height_px"]
         self.base = setup["resource_id_base"]
         self.next_id = 1
         self.seq = 0

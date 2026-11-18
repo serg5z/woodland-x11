@@ -34,6 +34,7 @@ void x11_net_default_config(x11_net_config *cfg, size_t outq_max, size_t budget)
   cfg->outq_min = 1024;
   cfg->outq_reserve = X11_REPLY_MAX + 64 * 32;  /* the largest reply and some events */
   cfg->outq_max = outq_max < cfg->outq_reserve + 4096 ? cfg->outq_reserve + 4096 : outq_max;
+  cfg->reply_cap = X11_REPLY_MAX;
   cfg->budget = budget;
   cfg->setup_timeout_ms = 10000;
   cfg->reject_wait_ms = 1000;
@@ -256,11 +257,13 @@ int x11_net_init(x11_net *net, x11_server *s, const x11_net_config *cfg, const x
 #endif
   net->s = s;
   net->cfg = *cfg;
+  if (!net->cfg.reply_cap) net->cfg.reply_cap = X11_REPLY_MAX;
+  if (net->cfg.reply_cap < 32) return -1;
   net->ops = *ops;
   net->stream_owner = -1;
   for (int i = 0; i < X11_SERVER_CLIENTS; ++i) net->conns[i].fd = -1;
   for (int i = 0; i < X11_NET_REJECT_SLOTS; ++i) net->rejects[i].fd = -1;
-  net->reply = (uint8_t *)raw_alloc(net, X11_REPLY_MAX);
+  net->reply = (uint8_t *)raw_alloc(net, net->cfg.reply_cap);
   if (!net->reply) return -1;
   plat->alloc = core_alloc;
   plat->release = core_release;
@@ -285,6 +288,7 @@ static void conn_close(x11_net *net, x11_conn *k, const char *why) {
   x11_latency_trace_client_reset((unsigned)k->slot);
 #endif
   if (net->stream_owner == k->slot) {
+    x11_reply_stream_cancel(&net->stream);
     net->stream_owner = -1;
     net->deferred_head = net->deferred_count = 0;
     memset(&net->stream, 0, sizeof(net->stream));
@@ -416,6 +420,7 @@ static int is_diag_get_property(const x11_net *net, const x11_conn *k) {
 static int can_run_during_stream(const x11_net *net, const x11_conn *k) {
   if (net->stream_owner < 0) return 1;
   if (net->stream_owner == k->slot || k->have < 4) return 0;
+  if (net->stream.kind == 2) return 0;    /* property source must remain immutable until drained */
   uint8_t op = k->in[0];
   if (op >= 1 && op <= 14) return 0;       /* window tree/visibility/geometry */
   if (op == 54 || (op >= 61 && op <= 73)) return 0; /* frees, drawing, competing image streams */
@@ -430,7 +435,9 @@ static int process(x11_net *net, x11_conn *k) {
   for (int first = 1;; first = 0) {
     if (k->dead) return -1;
     /* Preserve the image while allowing unrelated clients to continue making progress. */
-    if (!can_run_during_stream(net, k)) return 0;
+    if (!can_run_during_stream(net, k)) {
+      return 0;
+    }
 #ifdef X11_LATENCY_TRACE
     if (k->set_up && k->have >= 4 && !k->trace_request_ready_us) {
       size_t pending = x11_request_size(s, k->slot, k->in);
@@ -449,7 +456,7 @@ static int process(x11_net *net, x11_conn *k) {
     }
     if (!k->set_up) {
       x11_setup_result r;
-      size_t n = x11_client_setup(s, k->slot, k->in, k->have, net->reply, X11_REPLY_MAX, &r);
+      size_t n = x11_client_setup(s, k->slot, k->in, k->have, net->reply, net->cfg.reply_cap, &r);
       if (r.status == X11_SETUP_NEED_MORE) {
         if (r.needed > net->cfg.in_max) {
           k->dead = R_SETUP_TOO_LARGE;
@@ -490,7 +497,7 @@ static int process(x11_net *net, x11_conn *k) {
     size_t need = x11_request_size(s, k->slot, k->in);
     if (!need) {  /* too long: BadLength, and the client stays (as X.Org does) */
       size_t skip;
-      size_t n = x11_client_request_too_long(s, k->slot, k->in, net->reply, X11_REPLY_MAX, &skip);
+      size_t n = x11_client_request_too_long(s, k->slot, k->in, net->reply, net->cfg.reply_cap, &skip);
       if (n) {
         ++net->n.requests;
         ++net->n.errors;
@@ -542,7 +549,7 @@ static int process(x11_net *net, x11_conn *k) {
 #endif
     x11_reply_stream local_stream = {0};
     x11_reply_stream *stream = net->stream_owner < 0 ? &net->stream : &local_stream;
-    size_t n = x11_client_request_stream(s, k->slot, k->in, len, net->reply, X11_REPLY_MAX, &close_after, stream);
+    size_t n = x11_client_request_stream(s, k->slot, k->in, len, net->reply, net->cfg.reply_cap, &close_after, stream);
     if (opcode >= 62 && opcode <= 77) net->n.graphics_requests = sat_inc_u64(net->n.graphics_requests);
     if (net->ops.now_us) {
       uint64_t dt = net->ops.now_us(net->ops.io) - t0;
@@ -552,6 +559,11 @@ static int process(x11_net *net, x11_conn *k) {
       if (opcode == 70) x11_latency_trace_polyfill_time(dt);
 #endif
       if (dt > net->n.request_us_max) net->n.request_us_max = (uint32_t)dt, net->n.request_us_max_op = opcode;
+      if (opcode == 128) {
+        ++net->n.xtest_requests;
+        net->n.xtest_request_us_total = sat_add_u64(net->n.xtest_request_us_total, dt);
+        if (dt > net->n.xtest_request_us_max) net->n.xtest_request_us_max = (uint32_t)dt;
+      }
       if (diag_request && dt > net->n.diag_service_us_max) net->n.diag_service_us_max = (uint32_t)dt;
       if (opcode >= 62 && opcode <= 77) {
         net->n.graphics_us_total = sat_add_u64(net->n.graphics_us_total, dt);
@@ -896,6 +908,9 @@ size_t x11_net_stats(const x11_net *net, char *out, size_t cap) {
       (unsigned long long)c->errors, (unsigned long long)c->events, (unsigned long)c->backpressure_waits,
       (unsigned long)c->passes_over_budget, (unsigned long)c->request_us_max, (unsigned)c->request_us_max_op,
       (unsigned long)c->pass_us_max);
+  put(&b, "net.xtest_requests=%lu\nnet.xtest_request_us_max=%lu\nnet.xtest_request_us_total=%llu\n",
+      (unsigned long)c->xtest_requests, (unsigned long)c->xtest_request_us_max,
+      (unsigned long long)c->xtest_request_us_total);
   put(&b, "net.requests_pass_max=%lu\nnet.client_requests_pass_max=%lu\n"
           "net.passes_exceeded_request_budget=%llu\nnet.request_budget_over_us_max=%lu\n"
           "net.graphics_requests=%llu\nnet.graphics_us_total=%llu\nnet.graphics_us_max=%lu\n"

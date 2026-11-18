@@ -24,6 +24,16 @@ extern "C" {
 #endif
 
 typedef struct {
+  /* Optional non-addressable drawable storage (for example LCD GRAM). Callbacks use
+   * surface coordinates and RGB565 values. NULL ops retains the original RAM path. */
+  uint32_t (*get_pixel)(void *ctx, int x, int y, int depth);
+  void (*put_pixel)(void *ctx, int x, int y, int depth, uint32_t pixel);
+  void (*fill_rect)(void *ctx, int x, int y, int w, int h, uint32_t pixel, int depth);
+  void (*read_span)(void *ctx, int x, int y, int count, uint16_t *dst);
+  void (*write_span)(void *ctx, int x, int y, int count, const uint16_t *src);
+} xr_surface_ops;
+
+typedef struct {
   int16_t x1, y1, x2, y2;  /* half-open: [x1, x2) x [y1, y2) */
 } xr_rect;
 
@@ -81,11 +91,17 @@ typedef struct {
 } xr_damage;
 
 typedef struct {
-  void *pix;               /* depth 16: uint16_t per pixel; depth 1: uint8_t per pixel (0/1) */
-  int w, h, stride;        /* stride in pixels */
+  void *pix;               /* RAM pixels: RGB565, byte 0/1, or LSB-first packed bitmap */
+  int w, h, stride;        /* pixels for RGB565/byte pixels; bytes per row when packed1 */
   int depth;               /* 1 or 16 */
   xr_damage *dmg;          /* NULL: no tracking (pixmaps); the screen tracks what it changes */
+  const xr_surface_ops *ops; /* NULL: pix points at RAM; otherwise callbacks own storage */
+  void *ctx;
+  uint8_t packed1;          /* depth-1 RAM uses one bit per pixel when set */
 } xr_surface;
+
+/* Allocated RAM bytes, including compact depth-1 storage and row stride. */
+size_t xr_surface_storage_bytes(const xr_surface *s);
 
 void xr_damage_reset(xr_damage *d);
 
@@ -112,6 +128,8 @@ typedef struct {
 
 /* All coordinates are in surface pixels; the clip region is in the same coordinates. */
 void xr_fill_rect(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y, int w, int h);
+void xr_put_span(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y, const uint16_t *pixels,
+                 int count);
 void xr_point_set(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y);
 void xr_line(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x0, int y0, int x1, int y1,
              int width, int skip_last);

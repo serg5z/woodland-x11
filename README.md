@@ -1,6 +1,6 @@
 # Woodland X11
 
-An X11 server (core protocol, no extensions) that runs on an ESP32-S3 and draws on the
+An X11 server (core protocol plus XTEST pointer input) that runs on an ESP32-S3 and draws on the
 **Elecrow CrowPanel Advance 4.3"** (ESP32-S3-N16R8, 800×480 RGB565 IPS panel, GT911 touch).
 X clients connect over Wi-Fi (TCP 6000 + display) or, in the IDF64 profile, over an SPI link to a
 host computer. The same portable C core also builds as a host server with a macOS viewer, which
@@ -47,7 +47,9 @@ security review beyond MIT-MAGIC-COOKIE-1 authentication and an authenticated OT
     `xscreensaver-settings`) exit with `BadLength` on PutImage: Cairo sends the rows without the
     scanline padding the protocol requires, and Xvfb rejects the same request. The server's reply is
     correct; a small Cairo patch fixes it (not yet upstream).
-- Not supported: extensions (XKB, RENDER, XTEST, SHAPE, …), dashed lines in PolyLine,
+- XTEST 2.2: synthetic pointer motion and buttons, including disconnect cleanup; synthetic
+  keyboard input is ignored.
+- Not supported: extensions (XKB, RENDER, SHAPE, …), dashed lines in PolyLine,
   PolySegment and PolyArc (BadImplementation), wide lines and arcs other than rectangles drawn
   pixel-exactly, CopyPlane from depth 16, clip masks over 64 rectangles.
 - Known open issues: a few pointer/keyboard grab cases; a two-finger tap held longer than
@@ -67,6 +69,14 @@ security review beyond MIT-MAGIC-COOKIE-1 authentication and an authenticated OT
 | `tests/` | C and Python host tests; `idf_socket_capacity_poc/` (lwIP capacity checks) |
 | `tools/` | OTA client, diagnostics tools, generators, XTS harness (`xts/`), client probes |
 | `licenses/` | third-party license texts (Terminus font; X.Org cursor font, colour names, twm) |
+
+## Experimental classic ESP32 CYD port
+
+An experimental port targets the ESP32-2432S028 Cheap Yellow Display without PSRAM. It uses
+the ST7789 LCD GRAM as the screen drawable and XPT2046 touch for pointer input. Window-manager
+rendering and GTK/Qt compatibility are not currently reliable or claimed. See
+[`esp32/cyd/README.md`](esp32/cyd/README.md) for the tested board profile, build, authentication,
+and memory limits.
 
 ## Host build and tests
 

@@ -527,7 +527,7 @@ static int enqueue(x11_server *s, uint8_t type, int button, int phys, int x, int
   return 1;
 }
 
-void x11_pointer_input(x11_server *s, int x, int y, unsigned buttons) {
+static void pointer_input_apply(x11_server *s, int x, int y, unsigned buttons) {
   if (x < 0) x = 0;
   if (y < 0) y = 0;
   if (x >= s->root->w) x = s->root->w - 1;
@@ -545,6 +545,46 @@ void x11_pointer_input(x11_server *s, int x, int y, unsigned buttons) {
   }
   s->in_buttons = (uint16_t)buttons;
   drain(s);
+}
+
+void x11_pointer_input(x11_server *s, int x, int y, unsigned buttons) {
+  s->platform_buttons = (uint16_t)(buttons & ((1u << MAX_BUTTONS) - 1));
+  pointer_input_apply(s, x, y, s->platform_buttons | s->xtest_buttons);
+}
+
+static uint16_t xtest_buttons_union(const x11_server *s) {
+  uint16_t buttons = 0;
+  for (int c = 0; c < X11_SERVER_CLIENTS; ++c)
+    if (s->clients[c].active) buttons |= s->clients[c].xtest_buttons;
+  return buttons;
+}
+
+int x11_test_pointer_input(x11_server *s, int client, uint8_t type, uint8_t detail, int relative, int x, int y) {
+  (void)relative; /* coordinates are already absolute after protocol decoding */
+  if (client < 0 || client >= X11_SERVER_CLIENTS || !s->clients[client].active) return -1;
+  if (type == MOTION_NOTIFY) {
+    pointer_input_apply(s, x, y, s->platform_buttons | s->xtest_buttons);
+    return 0;
+  }
+  if ((type != BUTTON_PRESS && type != BUTTON_RELEASE) || detail < 1 || detail > MAX_BUTTONS) return -1;
+  uint16_t bit = (uint16_t)(1u << (detail - 1));
+  uint16_t owner_before = s->clients[client].xtest_buttons;
+  uint16_t owned = owner_before;
+  uint16_t before = s->xtest_buttons;
+  (void)owner_before;
+  (void)before;
+  if (type == BUTTON_PRESS) owned |= bit;
+  else owned &= (uint16_t)~bit;  /* a client cannot release another client's held button */
+  if (owned == s->clients[client].xtest_buttons) {
+    return 0;
+  }
+  s->clients[client].xtest_buttons = (uint8_t)owned;
+  uint16_t buttons = xtest_buttons_union(s);
+  if (buttons != s->xtest_buttons) {
+    s->xtest_buttons = buttons;
+    pointer_input_apply(s, s->in_x, s->in_y, s->platform_buttons | s->xtest_buttons);
+  }
+  return 0;
 }
 
 void x_warp_pointer(x11_server *s, int x, int y) {
@@ -588,5 +628,18 @@ void x_input_client_gone(x11_server *s, int c) {
   if (s->pgrab.client == c) deactivate(s);
   if (s->kgrab_client == c) s->kgrab_client = -1;
   x_bit_clear(s->hints, c);
+#ifndef X11_TEST_DISABLE_XTEST_DISCONNECT_CLEANUP
+  if (s->clients[c].xtest_buttons) {
+    uint16_t owner_before = s->clients[c].xtest_buttons, aggregate_before = s->xtest_buttons;
+    (void)owner_before;
+    (void)aggregate_before;
+    s->clients[c].xtest_buttons = 0;
+    uint16_t buttons = xtest_buttons_union(s);
+    if (buttons != s->xtest_buttons) {
+      s->xtest_buttons = buttons;
+      pointer_input_apply(s, s->in_x, s->in_y, s->platform_buttons | s->xtest_buttons);
+    }
+  }
+#endif
   drain(s);
 }

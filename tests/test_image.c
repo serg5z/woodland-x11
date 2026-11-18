@@ -87,11 +87,11 @@ static int image_case(int function, uint32_t planes, int with_fill) {
   random_clip(&clip);
   xr_paint p = {(uint8_t)function, planes, (uint32_t)rnd() & 0xFFFF, (uint32_t)rnd() & 0xFFFF};
   xr_damage da, dr;
-  xr_surface D = {a16, SW, SH, SW, 16, &da}, R = {ref16, SW, SH, SW, 16, &dr};
+  xr_surface D = {a16, SW, SH, SW, 16, &da, 0, 0, 0}, R = {ref16, SW, SH, SW, 16, &dr, 0, 0, 0};
   xr_damage_reset(&da);
   xr_damage_reset(&dr);
   static uint16_t tile_pix[4] = {1, 2, 3, 4};
-  xr_surface tile = {tile_pix, 2, 2, 2, 16, 0};
+  xr_surface tile = {tile_pix, 2, 2, 2, 16, 0, 0, 0, 0};
   xr_fill f = {1, &tile, 0, 0};
   if (with_fill) xr_fill_use(&f);
   xr_image_fast_enabled = 1;
@@ -120,13 +120,13 @@ static void test_render(void) {
   }
   /* depth-1 surface: refused */
   uint8_t px1[16] = {0};
-  xr_surface s1 = {px1, 4, 4, 4, 1, 0};
+  xr_surface s1 = {px1, 4, 4, 4, 1, 0, 0, 0, 0};
   xr_region all;
   xr_region_set(&all, 0, 0, 4, 4);
   xr_paint p = {3, 0xFFFFFFFFu, 1, 0};
   CHECK(xr_put_image16(&s1, &all, &p, 0, 0, 2, 2, imgbuf, 4) == 0);
   /* disabled: refused */
-  xr_surface s16 = {a16, SW, SH, SW, 16, 0};
+  xr_surface s16 = {a16, SW, SH, SW, 16, 0, 0, 0, 0};
   xr_image_fast_enabled = 0;
   CHECK(xr_put_image16(&s16, &all, &p, 0, 0, 2, 2, imgbuf, 4) == 0);
   xr_image_fast_enabled = 1;

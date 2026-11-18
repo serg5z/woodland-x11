@@ -25,10 +25,10 @@ COOKIE = bytes(range(0xA0, 0xB0))
 # What xdpyinfo (libX11 + libxcb, default options) sends after setup, verified on macOS
 # (MacPorts) and Debian.
 XDPYINFO_EXPECTED = [
-    "version number:    11.0", "vendor string:    Woodland Lab experimental X11 (ESP32-S3)",
+    "version number:    11.0", "vendor string:    Woodland Lab experimental X11",
     "maximum request size:  16384 bytes", "bitmap unit, bit order, padding:    32, LSBFirst, 32",
     "depth 16, bits_per_pixel 16, scanline_pad 32", "keycode range:    minimum 8, maximum 255",
-    "focus:  PointerRoot", "number of extensions:    0",
+    "focus:  PointerRoot", "number of extensions:    1", "    XTEST",
     "dimensions:    800x480 pixels (95x54 millimeters)", "depths (2):    16, 1",
     "root window id:    0x26", "default colormap:    0x20", "default number of colormap cells:    64",
     "preallocated pixels:    black 0, white 65535", "largest cursor:    32x32",
@@ -135,6 +135,111 @@ class HostServerTest(unittest.TestCase):
             r = recv_exact(s, 32)                                       # seq 3 had no reply
             self.assertEqual((r[0], r[1], struct.unpack(e + "H", r[2:4])[0], r[10]), (0, 10, 4, 109))
             s.close()
+
+    def test_diagnostic_property_content_slicing_and_read_only(self):
+        srv = self.start()
+        s, setup = connect(srv.port, False)
+        self.addCleanup(s.close)
+        s.settimeout(3)
+        root = setup["screens"][0]["root"]
+
+        def request(op, data1, body):
+            n = 4 + len(body)
+            s.sendall(struct.pack("<BBH", op, data1, n // 4) + body)
+
+        def response(expected_seq):
+            while True:
+                packet = recv_exact(s, 32)
+                seq = struct.unpack_from("<H", packet, 2)[0]
+                if packet[0] == 0:
+                    self.assertEqual(seq, expected_seq, packet.hex())
+                    return packet
+                if packet[0] == 1 and seq == expected_seq:
+                    return packet
+
+        name = b"_WOODLAND_DIAG"
+        request(16, 0, struct.pack("<HH", len(name), 0) + name + b"\0" * (-len(name) % 4))
+        atom_reply = response(1)
+        atom = struct.unpack_from("<I", atom_reply, 8)[0]
+        self.assertNotEqual(atom, 0)
+
+        request(20, 0, struct.pack("<IIIII", root, atom, 0, 0, 4096))
+        full_reply = response(2)
+        self.assertEqual((full_reply[1], struct.unpack_from("<I", full_reply, 8)[0]), (8, 31))
+        full_len = struct.unpack_from("<I", full_reply, 16)[0]
+        full = recv_exact(s, (full_len + 3) & ~3)[:full_len]
+        self.assertIn(b"core.resources=", full)
+        self.assertIn(b"net.core_alloc_failed=", full)
+
+        offset, length = 1, 1
+        request(20, 0, struct.pack("<IIIII", root, atom, 31, offset, length))
+        slice_reply = response(3)
+        slice_len = struct.unpack_from("<I", slice_reply, 16)[0]
+        sliced = recv_exact(s, (slice_len + 3) & ~3)[:slice_len]
+        self.assertEqual(sliced, full[offset * 4:(offset + length) * 4])
+        self.assertEqual(slice_len, 4)
+        self.assertGreater(struct.unpack_from("<I", slice_reply, 12)[0], 0)
+
+        request(18, 0, struct.pack("<IIIB3xI", root, atom, 31, 8, 1) + b"X\0\0\0")
+        change_error = response(4)
+        self.assertEqual((change_error[0], change_error[1]), (0, 10))
+        request(19, 0, struct.pack("<II", root, atom))
+        delete_error = response(5)
+        self.assertEqual((delete_error[0], delete_error[1]), (0, 10))
+        s.close()
+
+    def test_xtest_release_and_disconnect_while_another_client_grabs_pointer(self):
+        srv = self.start()
+        grabber, setup = connect(srv.port, False)
+        injector, _ = connect(srv.port, False)
+        observer, _ = connect(srv.port, False)
+        for sock in (grabber, injector, observer):
+            sock.settimeout(3)
+        root = setup["screens"][0]["root"]
+
+        # GrabPointer(root, owner-events=False, ButtonPress|ButtonRelease|PointerMotion).
+        grabber.sendall(struct.pack("<BBHIHBBIII", 26, 0, 6, root, 0x4 | 0x8 | 0x40, 1, 1, 0, 0, 0))
+        reply = recv_exact(grabber, 32)
+        self.assertEqual((reply[0], reply[1]), (1, 0))
+
+        def fake(event_type, detail=0, x=73, y=91):
+            injector.sendall(struct.pack("<BBHBBHII8shh8s", 128, 2, 9, event_type, detail, 0,
+                                         0, root, bytes(8), x, y, bytes(8)))
+
+        def expect_event(event_type, x, y, detail=None):
+            event = recv_exact(grabber, 32)
+            self.assertEqual((event[0] & 0x7F, struct.unpack("<h", event[20:22])[0],
+                              struct.unpack("<h", event[22:24])[0]), (event_type, x, y))
+            if detail is not None:
+                self.assertEqual(event[1], detail)
+
+        fake(6, 0, 73, 91)
+        expect_event(6, 73, 91)
+        fake(4, 1, 73, 91)
+        expect_event(4, 73, 91, 1)
+        fake(6, 0, 121, 99)
+        expect_event(6, 121, 99)
+
+        # Delay ButtonRelease while grabbed; a different X11 client must still respond.
+        observer.sendall(struct.pack("<BBH", 43, 0, 1))  # GetInputFocus
+        focus = recv_exact(observer, 32)
+        self.assertEqual((focus[0], struct.unpack("<H", focus[2:4])[0]), (1, 1))
+        time.sleep(0.02)
+        fake(5, 1, 121, 99)
+        expect_event(5, 121, 99, 1)
+
+        # Losing the XTEST connection while down must synthesize its effective release.
+        fake(4, 2, 121, 99)
+        event = recv_exact(grabber, 32)
+        self.assertEqual((event[0] & 0x7F, event[1]), (4, 2))
+        injector.close()
+        event = recv_exact(grabber, 32)
+        self.assertEqual((event[0] & 0x7F, event[1]), (5, 2))
+        observer.sendall(struct.pack("<BBH", 43, 0, 1))
+        focus = recv_exact(observer, 32)
+        self.assertEqual((focus[0], struct.unpack("<H", focus[2:4])[0]), (1, 2))
+        grabber.close()
+        observer.close()
 
     def test_getimage_stream_backpressure_other_client_and_event_order(self):
         srv = self.start("--clients", "6", "--budget-mb", "4", "--outq-kb", "96", "--sndbuf-kb", "4")

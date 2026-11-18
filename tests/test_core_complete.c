@@ -74,6 +74,7 @@ static void beg(rq *q, int c, uint8_t op, uint8_t d1) {
   q->msb = MSB[c], q->b[0] = op, q->b[1] = d1, q->n = 4;
 }
 static void w32(rq *q, uint32_t v) { x_wr32(q->b + q->n, v, q->msb); q->n += 4; }
+static void w16(rq *q, uint16_t v) { x_wr16(q->b + q->n, v, q->msb); q->n += 2; }
 static void w8x4(rq *q, uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
   q->b[q->n] = a, q->b[q->n + 1] = b, q->b[q->n + 2] = c, q->b[q->n + 3] = d;
   q->n += 4;
@@ -458,10 +459,10 @@ static void test_resource_counts(int msb) {
   memcpy(q.b + q.n, "abcde\0\0\0", 8), q.n += 8;
   CHECK(send_q(c, &q) == 0);
   beg(&q, c, 53, 16);  /* 30x7 depth 16 and 13x5 depth 1 */
-  w32(&q, base + 3); w32(&q, X11_ID_ROOT_WINDOW); w32(&q, 30 | 7u << 16);
+  w32(&q, base + 3); w32(&q, X11_ID_ROOT_WINDOW); w16(&q, 30); w16(&q, 7);
   CHECK(send_q(c, &q) == 0);
   beg(&q, c, 53, 1);
-  w32(&q, base + 4); w32(&q, X11_ID_ROOT_WINDOW); w32(&q, 13 | 5u << 16);
+  w32(&q, base + 4); w32(&q, X11_ID_ROOT_WINDOW); w16(&q, 13); w16(&q, 5);
   CHECK(send_q(c, &q) == 0);
   beg(&q, c, 55, 0);  /* CreateGC */
   w32(&q, base + 5); w32(&q, base + 1); w32(&q, 0);
@@ -469,9 +470,9 @@ static void test_resource_counts(int msb) {
   unsigned long pixbytes = 0;
   for (uint32_t id = base + 3; id <= base + 4; ++id) {
     const xr_surface *sf = &((const x11_pixmap *)x_find(&srv, id)->obj)->surf;
-    pixbytes += (unsigned long)sf->stride * sf->h * (sf->depth == 16 ? 2u : 1u);
+    pixbytes += (unsigned long)xr_surface_storage_bytes(sf);
   }
-  CHECK(pixbytes >= 30 * 7 * 2 + 13 * 5);
+  CHECK(pixbytes == 30 * 7 * 2 + 2 * 5);
   CHECK(stat_value("core.res_windows") == before[0] + 2);
   CHECK(stat_value("core.res_pixmaps") == before[1] + 2);
   CHECK(stat_value("core.res_gcs") == before[2] + 1);

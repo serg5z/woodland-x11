@@ -108,8 +108,8 @@ static void test_xdpyinfo_sequence(int msb) {
   expect_reply(run(c, &q), msb, 4, 0);                                        /* GetInputFocus */
   CHECK(out[1] == 0 && g32(out + 8, msb) == 1);                               /* PointerRoot */
   begin(&q, msb, 99, 0);
-  expect_reply(run(c, &q), msb, 5, 0);                                        /* ListExtensions */
-  CHECK(out[1] == 0);
+  expect_reply(run(c, &q), msb, 5, 8);                                        /* ListExtensions */
+  CHECK(out[1] == 1 && out[32] == 5 && !memcmp(out + 33, "XTEST", 5));
   begin(&q, msb, 97, 0); add32(&q, X11_ID_ROOT_WINDOW); add16pair(&q, 65535, 65535);
   expect_reply(run(c, &q), msb, 6, 0);                                        /* QueryBestSize cursor */
   CHECK(g16(out + 8, msb) == 32 && g16(out + 10, msb) == 32);
@@ -202,7 +202,8 @@ static void test_framing(void) {
   CHECK(skip == 4 * 4097);
   CHECK(x11_client_request_too_long(&srv, c, ok, out, sizeof(out), &skip) == 0 && skip == 0);
   CHECK(srv.clients[c].seq == 2);
-  CHECK(x11_client_request(&srv, c, hdr, 4, out, 40, &close_after) == 0);  /* output too small: refuse */
+  n = x11_client_request(&srv, c, hdr, 4, out, 40, &close_after);  /* 40 bytes fit the 32-byte BadLength */
+  CHECK(n == 32 && out[1] == X11_BAD_LENGTH && !close_after);
   x11_server_free(&srv);
 }
 
