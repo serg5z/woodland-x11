@@ -27,7 +27,7 @@ static int failures = 0;
 /* ---- raster ------------------------------------------------------------------------------ */
 
 static uint16_t px[64 * 64];
-static xr_surface S = {px, 64, 64, 64, 16, 0};
+static xr_surface S = {px, 64, 64, 64, 16, 0, 0, 0, 0};
 static xr_region ALL;
 static xr_paint COPY = {3, 0xFFFFFFFFu, 0xFFFF, 0};
 
@@ -136,7 +136,7 @@ static void test_copy_and_rop(void) {
   CHECK(px[0] == 0x00FF);
   /* depth-1 plane drawn opaque */
   uint8_t bits[4] = {1, 0, 1, 0};
-  xr_surface b = {bits, 4, 1, 4, 1, 0};
+  xr_surface b = {bits, 4, 1, 4, 1, 0, 0, 0, 0};
   xr_paint fgbg = {3, 0xFFFFFFFFu, 0xF800, 0x001F};
   xr_copy_plane(&S, &ALL, &fgbg, &b, 0, 0, 4, 1, 0, 5, 1);
   CHECK(px[5 * 64] == 0xF800 && px[5 * 64 + 1] == 0x001F && px[5 * 64 + 2] == 0xF800);

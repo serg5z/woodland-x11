@@ -67,6 +67,7 @@ typedef struct {
   size_t in_min, in_max;         /* input buffer: initial, largest (one maximum request) */
   size_t outq_min, outq_max;     /* output queue: initial (kept while idle), largest */
   size_t outq_reserve;           /* room needed before running a request (largest reply + events) */
+  size_t reply_cap;              /* shared core reply scratch; 0 selects X11_REPLY_MAX */
   size_t budget;                 /* bytes for connection buffers and core allocations; 0: unlimited */
   uint32_t request_budget_us;    /* request processing per pass (needs now_us); 0: unlimited */
   uint32_t setup_timeout_ms;     /* a connection must finish setup within this; 0: no limit */
@@ -131,6 +132,8 @@ typedef struct {
    * opcode, and the slowest x11_net_pass (requests, reads, writes) */
   uint32_t request_us_max, pass_us_max;
   uint8_t request_us_max_op;
+  uint32_t xtest_requests, xtest_request_us_max;
+  uint64_t xtest_request_us_total;
   /* Bounded load diagnostics. These waits measure from first byte received into the input
    * buffer to dispatch; they do not include Wi-Fi transit or unread lwIP socket data. */
   uint32_t requests_pass_max, client_requests_pass_max;
@@ -151,7 +154,7 @@ typedef struct {
   x11_net_ops ops;
   x11_conn conns[X11_SERVER_CLIENTS];
   x11_reject rejects[X11_NET_REJECT_SLOTS];
-  uint8_t *reply;                /* X11_REPLY_MAX, shared by all connections */
+  uint8_t *reply;                /* reply_cap bytes, shared by all connections */
   uint8_t stream_buf[X11_REPLY_STREAM_CHUNK]; /* bounded scratch shared by the single active stream */
   x11_reply_stream stream;
   int stream_owner;              /* slot whose reply owns the stream, -1 when idle */
@@ -165,7 +168,8 @@ typedef struct {
 
 /* Sets up the transport and fills in plat.alloc/release/deliver/ctx so the core uses the
  * budget and delivers events through the connections; then call x11_server_init_platform
- * with that plat. Returns -1 when the shared reply buffer cannot be allocated. */
+ * with that plat. reply_cap defaults to X11_REPLY_MAX and can be reduced when large GetImage
+ * and GetProperty replies are streamed. Returns -1 when the shared reply buffer cannot be allocated. */
 int x11_net_init(x11_net *net, x11_server *s, const x11_net_config *cfg, const x11_net_ops *ops, x11_platform *plat);
 void x11_net_free(x11_net *net);
 

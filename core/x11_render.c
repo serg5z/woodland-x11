@@ -11,6 +11,11 @@
 #define XR_MAX_W 2048
 #define FX 16  /* polygon coordinates in 1/16 pixel */
 
+size_t xr_surface_storage_bytes(const xr_surface *s) {
+  if (!s || s->w <= 0 || s->h <= 0 || s->stride <= 0) return 0;
+  return (size_t)s->stride * (size_t)s->h * (s->depth == 16 ? 2u : 1u);
+}
+
 /* ---- region scratch pool ------------------------------------------------------------------ */
 
 static xr_pool *pool;
@@ -188,6 +193,9 @@ static uint32_t rop(uint8_t f, uint32_t s, uint32_t d) {
 }
 
 uint32_t xr_get(const xr_surface *s, int x, int y) {
+  if (s->ops && s->ops->get_pixel) return s->ops->get_pixel(s->ctx, x, y, s->depth);
+  if (s->depth == 1 && s->packed1)
+    return (((const uint8_t *)s->pix)[(size_t)y * s->stride + (unsigned)x / 8] >> (x & 7)) & 1u;
   if (s->depth == 1) return ((const uint8_t *)s->pix)[y * s->stride + x];
   return ((const uint16_t *)s->pix)[y * s->stride + x];
 }
@@ -217,7 +225,25 @@ static void put(const xr_surface *s, const xr_paint *p, int x, int y, uint32_t s
   if (fill && !fill_source(p, x, y, &src)) return;
   mark(s, x, y, x + 1);
   uint32_t full = s->depth == 1 ? 1u : 0xFFFFu, pm = p->plane_mask & full;
+  if (s->ops && s->ops->put_pixel) {
+    if (p->function == 3 && pm == full) {
+      s->ops->put_pixel(s->ctx, x, y, s->depth, src & full);
+      return;
+    }
+    uint32_t d = xr_get(s, x, y);
+    uint32_t v = (p->function == 3 && pm == full) ? src : ((d & ~pm) | (rop(p->function, src, d) & pm));
+    s->ops->put_pixel(s->ctx, x, y, s->depth, v & full);
+    return;
+  }
   if (s->depth == 1) {
+    if (s->packed1) {
+      uint8_t *byte = (uint8_t *)s->pix + (size_t)y * s->stride + (unsigned)x / 8;
+      uint8_t bit = (uint8_t)(1u << (x & 7));
+      uint32_t d = (*byte & bit) ? 1u : 0u;
+      uint32_t v = (p->function == 3 && pm == full) ? src : ((d & ~pm) | (rop(p->function, src, d) & pm));
+      *byte = (uint8_t)((*byte & (uint8_t)~bit) | ((v & 1u) ? bit : 0));
+      return;
+    }
     uint8_t *d = (uint8_t *)s->pix + y * s->stride + x;
     uint32_t v = (p->function == 3 && pm == full) ? src : ((*d & ~pm) | (rop(p->function, src, *d) & pm));
     *d = (uint8_t)(v & 1u);
@@ -227,6 +253,9 @@ static void put(const xr_surface *s, const xr_paint *p, int x, int y, uint32_t s
     *d = (uint16_t)v;
   }
 }
+
+static uint16_t linebuf[XR_MAX_W];
+static int in_clip(const xr_surface *s, const xr_region *clip, int x, int y);
 
 /* Span [x1, x2) on row y in colour src, clipped. */
 static void span(const xr_surface *s, const xr_region *clip, const xr_paint *p, int y, int x1, int x2, uint32_t src) {
@@ -242,6 +271,15 @@ static void span(const xr_surface *s, const xr_region *clip, const xr_paint *p, 
 #endif
     if (!fill && s->depth == 16 && p->function == 3 && (p->plane_mask & 0xFFFFu) == 0xFFFFu) {
       mark(s, a, y, b);
+      if (s->ops && s->ops->fill_rect) {
+        s->ops->fill_rect(s->ctx, a, y, b - a, 1, src, s->depth);
+        continue;
+      }
+      if (s->ops && s->ops->write_span) {
+        for (int x = a; x < b; ++x) linebuf[x - a] = (uint16_t)src;
+        s->ops->write_span(s->ctx, a, y, b - a, linebuf);
+        continue;
+      }
       uint16_t *d = (uint16_t *)s->pix + y * s->stride;
       for (int x = a; x < b; ++x) d[x] = (uint16_t)src;
     } else {
@@ -264,6 +302,28 @@ void xr_point_set(const xr_surface *s, const xr_region *clip, const xr_paint *p,
 void xr_fill_rect(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y, int w, int h) {
   if (w <= 0 || h <= 0) return;
   for (int yy = y; yy < y + h; ++yy) span(s, clip, p, yy, x, x + w, p->fg);
+}
+
+/* Transfer one row of RGB565 source pixels. The RAM surface keeps the per-pixel reference
+ * semantics; an address-free backend may accept contiguous GXcopy runs as one bus operation. */
+void xr_put_span(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y,
+                 const uint16_t *pixels, int count) {
+  if (!pixels || count <= 0 || y < 0 || y >= s->h) return;
+  int original_x = x, end = x + count;
+  if (x < 0) x = 0;
+  if (end > s->w) end = s->w;
+  if (end <= x) return;
+  uint32_t full = s->depth == 1 ? 1u : 0xFFFFu;
+  if (s->depth == 16 && p->function == 3 && (p->plane_mask & full) == full && s->ops && s->ops->write_span) {
+    for (int c = 0; c < clip->n; ++c) {
+      const xr_rect *r = &clip->r[c];
+      if (y < r->y1 || y >= r->y2) continue;
+      int a = x > r->x1 ? x : r->x1, b = end < r->x2 ? end : r->x2;
+      if (a < b) { s->ops->write_span(s->ctx, a, y, b-a, pixels + (a - original_x)); mark(s, a, y, b); }
+    }
+    return;
+  }
+  for (int xx = x; xx < end; ++xx) if (in_clip(s, clip, xx, y)) put(s, p, xx, y, pixels[xx - original_x]);
 }
 
 /* ---- polygons (1/16 pixel coordinates) ---------------------------------------------------- */
@@ -459,7 +519,6 @@ void xr_arc(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x
 
 /* ---- copies ------------------------------------------------------------------------------ */
 
-static uint16_t linebuf[XR_MAX_W];
 xr_counters xr_count;
 int xr_copy_fast_enabled = 1;
 
@@ -471,7 +530,8 @@ static void copy_rows(const xr_surface *dst, const xr_region *clip, const xr_pai
   if (sx + w > src->w) w = src->w - sx;
   if (sy + h > src->h) h = src->h - sy;
   if (w <= 0 || h <= 0 || w > XR_MAX_W) return;
-  int same = src->pix == dst->pix;
+  int same = src == dst || (src->ops && src->ops == dst->ops && src->ctx == dst->ctx) ||
+             (!src->ops && !dst->ops && src->pix && src->pix == dst->pix);
   int bottom_up = same && dy > sy;
   /* Fast path: a plain copy (GXcopy, all planes) between surfaces of the same depth moves
    * each clipped span with one memcpy and marks the damage once per span. Within one
@@ -479,9 +539,37 @@ static void copy_rows(const xr_surface *dst, const xr_region *clip, const xr_pai
    * down, exactly like the per-pixel path below (which stays the reference for every other
    * function, plane mask and for CopyPlane). */
   uint32_t full = dst->depth == 1 ? 1u : 0xFFFFu;
-  if (xr_copy_fast_enabled && !plane && src->depth == dst->depth && p->function == 3 &&
+  if (xr_copy_fast_enabled && !src->packed1 && !dst->packed1 && !plane && src->depth == dst->depth && p->function == 3 &&
       (p->plane_mask & full) == full) {
     size_t bpp = dst->depth == 1 ? 1 : 2;
+    if (src->depth == 16 && dst->depth == 16 &&
+        (src->ops || dst->ops)) {
+      for (int i = 0; i < h; ++i) {
+        int r = bottom_up ? h - 1 - i : i, y = dy + r;
+        if (y < 0 || y >= dst->h) continue;
+        if (src->depth == 16 && src->ops && src->ops->read_span) {
+          src->ops->read_span(src->ctx, sx, sy + r, w, linebuf);
+        } else if (src->ops) {
+          for (int x = 0; x < w; ++x) linebuf[x] = (uint16_t)xr_get(src, sx + x, sy + r);
+        } else {
+          memcpy(linebuf, (const uint16_t *)src->pix + (size_t)(sy + r) * src->stride + sx, (size_t)w * 2);
+        }
+        for (int c = 0; c < clip->n; ++c) {
+          const xr_rect *cr = &clip->r[c];
+          if (y < cr->y1 || y >= cr->y2) continue;
+          int a = dx > cr->x1 ? dx : cr->x1, b = dx + w < cr->x2 ? dx + w : cr->x2;
+          if (a < 0) a = 0;
+          if (b > dst->w) b = dst->w;
+          if (a >= b) continue;
+          int n = b - a, rowoff = a - dx;
+          if (dst->ops && dst->ops->write_span) dst->ops->write_span(dst->ctx, a, y, n, linebuf + rowoff);
+          else memcpy((uint16_t *)dst->pix + (size_t)y * dst->stride + a, linebuf + rowoff, (size_t)n * 2);
+          mark(dst, a, y, b);
+          xr_count.copy_fast_px += (unsigned long)n;
+        }
+      }
+      return;
+    }
     for (int i = 0; i < h; ++i) {
       int r = bottom_up ? h - 1 - i : i;
       int y = dy + r;

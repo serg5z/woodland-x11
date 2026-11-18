@@ -55,7 +55,9 @@ extern "C" {
  * allocated once with the server; InternAtom answers BadAlloc when either is full (atoms are
  * never freed, as in X.Org). */
 #define X11_MAX_DYNAMIC_ATOMS 512
+#ifndef X11_ATOM_POOL
 #define X11_ATOM_POOL 16384
+#endif
 #define X11_PREDEFINED_ATOMS 68
 #define X11_MAX_PROPERTY 65536      /* bytes per property value */
 #define X11_MAX_CLIP_RECTS 64       /* SetClipRectangles, clip-mask bitmaps as rectangles */
@@ -70,12 +72,20 @@ extern "C" {
  * transport serializes X requests while a stream is active, but continues polling touch and
  * draining the stream. Image byte/bit order follows the server setup, not client byte order. */
 typedef struct {
+  uint8_t kind;                  /* 0 none, 1 GetImage, 2 GetProperty */
   const xr_surface *src;
+  const uint8_t *prop_data;
+  uint8_t *prop_owned_data;
+  struct x11_server *owner;
+  size_t prop_bytes;
+  uint8_t prop_format, prop_msb, prop_owned;
   size_t offset, total, row_bytes, bitmap_row;
   uint32_t planes;
   int src_x, src_y;
   uint16_t width, height;
   uint8_t format, depth, active;
+  uint16_t read_cache[320];
+  int cache_x, cache_y, cache_n;
 } x11_reply_stream;
 
 /* Error codes (protocol encoding appendix). */
@@ -98,6 +108,8 @@ typedef struct {
   void (*deliver)(void *ctx, int client, const uint8_t *data, size_t len);
   void *ctx;
   uint16_t *framebuffer;                 /* width*height RGB565; NULL: allocated by the core */
+  const xr_surface_ops *framebuffer_ops; /* optional address-free screen drawable backend */
+  void *framebuffer_ctx;
   /* Runtime diagnostics, served as the read-only root property _WOODLAND_DIAG (generated at
    * each read; never stored, never in ListProperties, no PropertyNotify). Writes "key=value"
    * lines into out (at most cap bytes), returns the length. Counters are cumulative: reading
@@ -115,6 +127,8 @@ typedef struct {
   uint16_t resources;             /* resources owned (quota: cfg.max_resources_per_client) */
   uint8_t close_mode;             /* SetCloseDownMode: 0 Destroy, 1 RetainPermanent, 2 RetainTemporary */
   uint8_t retained;               /* closed in a Retain mode (1 or 2): resources kept, slot taken, no connection */
+  uint8_t xtest_impervious;       /* XTEST GrabControl: continue processing during GrabServer */
+  uint8_t xtest_buttons;          /* synthetic pointer buttons held by this XTEST client */
 } x11_client;
 
 struct x11_window;
@@ -226,7 +240,10 @@ typedef struct x11_server {
   int16_t ptr_x, ptr_y;           /* root coordinates, as processed */
   uint16_t ptr_buttons;           /* button state bits: 0x100 Button1 .. 0x1000 Button5 */
   int16_t in_x, in_y;             /* the platform's last input (ahead while frozen) */
-  uint16_t in_buttons;
+  uint16_t in_buttons;            /* merged platform and XTEST buttons */
+  uint16_t platform_buttons, xtest_buttons;
+  uint32_t xtest_fake[3];         /* MotionNotify, ButtonPress, ButtonRelease requests */
+  uint32_t xtest_key_ignored;
   struct x11_window *sprite;      /* the deepest viewable window containing the pointer */
   x11_pointer_grab pgrab;
   uint32_t pgrab_time;            /* last-pointer-grab time */
@@ -264,19 +281,24 @@ size_t x11_request_size(const x11_server *s, int c, const uint8_t hdr[4]);
  * header included, in *skip. Returns 0 (and *skip 0) when the length is not too large. */
 size_t x11_client_request_too_long(x11_server *s, int c, const uint8_t hdr[4], uint8_t *out, size_t out_cap,
                                    size_t *skip);
-/* out_cap >= X11_REPLY_MAX. Events caused by the request go through plat.deliver before
- * this returns (to the requester and to other clients). */
+/* out_cap >= 32. GetImage and GetProperty can stream replies larger than out_cap when using
+ * x11_client_request_stream; other oversized replies return BadAlloc. Events caused by the
+ * request go through plat.deliver before this returns. */
 size_t x11_client_request(x11_server *s, int c, const uint8_t *req, size_t len, uint8_t *out, size_t out_cap,
                           int *close_after);
-/* Network transports use this variant to stream GetImage payloads larger than the reply
- * scratch buffer. `stream` must be zeroed before each request. Other replies are unchanged. */
+/* Network transports use this variant to stream GetImage/GetProperty replies larger than
+ * the reply scratch buffer. `stream` must be zeroed before each request. */
 size_t x11_client_request_stream(x11_server *s, int c, const uint8_t *req, size_t len, uint8_t *out,
                                  size_t out_cap, int *close_after, x11_reply_stream *stream);
 /* Produces up to cap payload bytes and advances the stream; returns zero when complete. */
 size_t x11_reply_stream_read(x11_reply_stream *stream, uint8_t *out, size_t cap);
+/* Release resources held by a stream cancelled before completion. */
+void x11_reply_stream_cancel(x11_reply_stream *stream);
 /* GrabServer: while one client holds the server, the transport processes no request of
  * any other client (it keeps reading them). */
-static inline int x11_client_may_run(const x11_server *s, int c) { return s->grab < 0 || s->grab == c; }
+static inline int x11_client_may_run(const x11_server *s, int c) {
+  return s->grab < 0 || s->grab == c || (c >= 0 && c < X11_SERVER_CLIENTS && s->clients[c].xtest_impervious);
+}
 
 /* Next client to close because of KillClient (its bit is cleared), or -1 when none. The
  * transport closes that connection, which calls x11_client_close. */
@@ -297,6 +319,8 @@ int x11_take_damage(x11_server *s, xr_rect *out, int max);
  * a press that does not fit is dropped together with its release, so the logical button
  * state never stays down. Call between requests (not from inside plat.deliver). */
 void x11_pointer_input(x11_server *s, int x, int y, unsigned buttons);
+/* XTEST input shares the normal queue/grabs; synthetic button state belongs to client slot. */
+int x11_test_pointer_input(x11_server *s, int client, uint8_t type, uint8_t detail, int relative, int x, int y);
 
 const char *x11_atom_name(const x11_server *s, uint32_t atom);
 int x11_resources_used(const x11_server *s);
@@ -305,7 +329,9 @@ int x11_resources_used(const x11_server *s);
  * to out (cap bytes, NUL-terminated); returns the length written. */
 size_t x11_server_stats(const x11_server *s, char *out, size_t cap);
 #define X11_DIAG_ATOM "_WOODLAND_DIAG"
+#ifndef X11_DIAG_MAX
 #define X11_DIAG_MAX 16384          /* largest diagnostics text (generated into the reply buffer) */
+#endif
 
 /* The platform sets a property on the root window (not a client request): the value replaces
  * any earlier one (type STRING, format 8), and clients that select PropertyChange on the root

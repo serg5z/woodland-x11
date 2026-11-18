@@ -9,6 +9,10 @@
 #include "../net/x11_latency_trace.h"
 #endif
 
+#define X11_XTEST_MAJOR_OPCODE 128
+#define X11_XTEST_VERSION_MAJOR 2
+#define X11_XTEST_VERSION_MINOR 2
+
 /* ---- predefined atoms (protocol appendix "Predefined Atoms") -------------------------- */
 
 static const char *const PREDEFINED[X11_PREDEFINED_ATOMS + 1] = {
@@ -252,7 +256,7 @@ size_t x11_server_stats(const x11_server *s, char *out, size_t cap) {
     ++by_type[r->type];
     if (r->type == X11_RES_PIXMAP && r->obj) {
       const xr_surface *sf = &((const x11_pixmap *)r->obj)->surf;
-      pixmap_bytes += (unsigned long)sf->stride * (unsigned long)sf->h * (sf->depth == 16 ? 2u : 1u);
+      pixmap_bytes += (unsigned long)xr_surface_storage_bytes(sf);
     } else if (r->type == X11_RES_WINDOW && r->obj) {
       for (const x11_prop *pr = ((const x11_window *)r->obj)->props; pr; pr = pr->next) ++props, prop_bytes += pr->nbytes;
     }
@@ -351,15 +355,17 @@ int x11_server_init_platform(x11_server *s, const x11_server_config *cfg, const 
   s->atom_off = (uint16_t *)x_alloc(s, sizeof(uint16_t) * 2 * X11_MAX_DYNAMIC_ATOMS);
   if (s->atom_off) s->atom_len = s->atom_off + X11_MAX_DYNAMIC_ATOMS;
   uint16_t *fb = s->plat.framebuffer;
-  if (!fb) fb = (uint16_t *)x_alloc(s, (size_t)cfg->width_px * cfg->height_px * 2);
+  if (!fb && !s->plat.framebuffer_ops) fb = (uint16_t *)x_alloc(s, (size_t)cfg->width_px * cfg->height_px * 2);
   s->root = xw_root_create(s);
-  if (!s->atom_pool || !s->atom_off || !fb || !s->root) return -1;
+  if (!s->atom_pool || !s->atom_off || (!fb && !s->plat.framebuffer_ops) || !s->root) return -1;
   s->fb.pix = fb;
   s->fb.w = s->fb.stride = cfg->width_px;
   s->fb.h = cfg->height_px;
   s->fb.depth = 16;
   xr_damage_reset(&s->fb_op);
   s->fb.dmg = &s->fb_op;
+  s->fb.ops = s->plat.framebuffer_ops;
+  s->fb.ctx = s->plat.framebuffer_ctx;
   x_add(s, X11_ID_ROOT_WINDOW, 0xFF, X11_RES_WINDOW, s->root);
   if (s->plat.diag) {  /* the diagnostics atom exists from the start (InternAtom only-if-exists finds it) */
     atom_intern(s, (const uint8_t *)X11_DIAG_ATOM, sizeof(X11_DIAG_ATOM) - 1);
@@ -462,7 +468,7 @@ void x11_server_free(x11_server *s) {
     xw_free_sels(s, s->root);
     x_free(s, s->root);
   }
-  if (!s->plat.framebuffer) x_free(s, s->fb.pix);
+  if (!s->plat.framebuffer && !s->plat.framebuffer_ops) x_free(s, s->fb.pix);
   x_free(s, s->atom_pool);
   x_free(s, s->atom_off);
   x_free(s, s->resources);
@@ -824,16 +830,22 @@ static size_t change_property(ctx *x) {
   return 0;
 }
 
-static void prop_delete(ctx *x, x11_window *w, uint32_t name) {
+static uint8_t *prop_unlink(ctx *x, x11_window *w, uint32_t name) {
   for (x11_prop **pp = &w->props; *pp; pp = &(*pp)->next)
     if ((*pp)->name == name) {
       x11_prop *p = *pp;
       *pp = p->next;
-      x_free(x->s, p->data);
+      uint8_t *data = p->data;
+      p->data = 0;
       x_free(x->s, p);
       property_notify(x, w, name, 1);
-      return;
+      return data;
     }
+  return 0;
+}
+
+static void prop_delete(ctx *x, x11_window *w, uint32_t name) {
+  x_free(x->s, prop_unlink(x, w, name));
 }
 
 static size_t delete_property(ctx *x) {
@@ -895,6 +907,30 @@ static size_t get_property(ctx *x) {
   uint64_t want = (uint64_t)length * 4, avail = p->nbytes - start;
   uint32_t n = (uint32_t)(want < avail ? want : avail);
   uint32_t after = (uint32_t)(p->nbytes - (start + n));
+  size_t padded = x_pad4(n);
+  if (32 + padded > x->cap) {
+    if (!x->stream || !padded) return error(x, X11_BAD_ALLOC, 0);
+    uint8_t *r = reply(x, p->format, 0);
+    x_wr32(r + 4, (uint32_t)(padded / 4), x->msb);
+    x_wr32(r + 8, p->type, x->msb);
+    x_wr32(r + 12, after, x->msb);
+    x_wr32(r + 16, n / (p->format / 8), x->msb);
+    x11_reply_stream *st = x->stream;
+    st->kind = 2;
+    st->prop_data = p->data + start;
+    st->prop_bytes = n;
+    st->prop_format = p->format;
+    st->prop_msb = (uint8_t)x->msb;
+    st->total = padded;
+    st->offset = 0;
+    st->active = 1;
+    if (U8(1) && after == 0) {
+      st->owner = x->s;
+      st->prop_owned_data = prop_unlink(x, w, name);
+      st->prop_owned = 1;
+    }
+    return 32;
+  }
   uint8_t *r = reply(x, p->format, x_pad4(n));
   x_wr32(r + 8, p->type, x->msb);
   x_wr32(r + 12, after, x->msb);
@@ -1475,14 +1511,17 @@ static size_t create_pixmap(ctx *x) {
   if (!w || !h) return error(x, X11_BAD_VALUE, 0);
   if (depth != 1 && depth != 16) return error(x, X11_BAD_VALUE, depth);
   x11_pixmap *pm = (x11_pixmap *)x_alloc(x->s, sizeof(x11_pixmap));
-  size_t bpp = depth == 16 ? 2 : 1;
-  if ((size_t)w > SIZE_MAX / (size_t)h / bpp) { x_free(x->s, pm); return error(x, X11_BAD_ALLOC, 0); }
-  size_t bytes = (size_t)w * h * bpp;
+  int packed1 = depth == 1;
+  size_t stride = packed1 ? ((size_t)w + 7u) / 8u : (size_t)w;
+  size_t bpp = depth == 16 ? 2u : 1u;
+  if (stride > SIZE_MAX / (size_t)h / bpp) { x_free(x->s, pm); return error(x, X11_BAD_ALLOC, 0); }
+  size_t bytes = stride * (size_t)h * bpp;
   void *pix = pm ? x_alloc(x->s, bytes) : 0;
   if (!pix) { x_free(x->s, pm); return error(x, X11_BAD_ALLOC, 0); }
   memset(pix, 0, bytes);  /* contents are undefined by the protocol; zero is deterministic */
-  pm->surf.pix = pix, pm->surf.w = pm->surf.stride = w, pm->surf.h = h, pm->surf.depth = depth;
-  pm->surf.dmg = 0;  /* only the screen is tracked */
+  pm->surf.pix = pix, pm->surf.w = w, pm->surf.stride = (int)stride, pm->surf.h = h, pm->surf.depth = depth;
+  pm->surf.dmg = 0, pm->surf.ops = 0, pm->surf.ctx = 0;  /* pixmaps remain RAM backed */
+  pm->surf.packed1 = (uint8_t)packed1;
   if (!x_add(x->s, pid, x->ci, X11_RES_PIXMAP, pm)) {
     x_free(x->s, pix);
     x_free(x->s, pm);
@@ -1521,12 +1560,11 @@ static void gc_defaults(x11_gc *g, uint8_t depth) {
 static int mask_rects(const xr_surface *m, xr_rect *out, int max) {
   int n = 0, open0 = 0;  /* rectangles from open0 on can still grow downwards */
   for (int y = 0; y < m->h; ++y) {
-    const uint8_t *row = (const uint8_t *)m->pix + (size_t)y * m->stride;
     int open_end = n;
     for (int x = 0; x < m->w;) {
-      if (!row[x]) { ++x; continue; }
+      if (!xr_get(m, x, y)) { ++x; continue; }
       int x1 = x;
-      while (x < m->w && row[x]) ++x;
+      while (x < m->w && xr_get(m, x, y)) ++x;
       int i = open0;  /* the same run on the previous row: extend it */
       while (i < open_end && !(out[i].x1 == x1 && out[i].x2 == x && out[i].y2 == y)) ++i;
       if (i < open_end) {
@@ -1751,7 +1789,9 @@ static size_t resolve(ctx *x, uint32_t did, uint32_t gid, target *t, x11_gc **gc
   x11_gc *g = find_gc(x, gid);
   if (!g) return error(x, X11_BAD_GC, gid);
   t->clip = xr_pool_get();
-  if (!t->clip) return error(x, X11_BAD_ALLOC, 0);
+  if (!t->clip) {
+    return error(x, X11_BAD_ALLOC, 0);
+  }
   if (d->type == X11_RES_WINDOW) {
     x11_window *w = (x11_window *)d->obj;
     if (w->input_only) return error(x, X11_BAD_MATCH, did);
@@ -1773,7 +1813,9 @@ static size_t resolve(ctx *x, uint32_t did, uint32_t gid, target *t, x11_gc **gc
   if (g->nclip >= 0) {  /* GC clip rectangles, relative to the clip origin */
     int m = xr_pool_mark();
     xr_region *out = xr_pool_get(), *part = xr_pool_get();
-    if (!out || !part) return error(x, X11_BAD_ALLOC, 0);
+    if (!out || !part) {
+      return error(x, X11_BAD_ALLOC, 0);
+    }
     for (int i = 0; i < g->nclip; ++i) {
       *part = *t->clip;
       xr_rect r = g->clip[i];
@@ -2066,6 +2108,19 @@ static size_t put_image(ctx *x) {
   if (x->len < 24 + need || x->len > 24 + x_pad4(need) + 3) return error(x, X11_BAD_LENGTH, 0);
   xr_paint p = paint_of(g, t.depth);
   const uint8_t *data = x->q + 24;
+  if (bits && t.surf->ops && p.function == 3 && (p.plane_mask & 0xFFFFu) == 0xFFFFu) {
+    uint16_t chunk[128];
+    for (int yy = 0; yy < h; ++yy) {
+      const uint8_t *r = data + row * (size_t)yy;
+      for (int base = 0; base < w; base += 128) {
+        int n = w - base; if (n > 128) n = 128;
+        for (int i = 0; i < n; ++i) chunk[i] = (uint16_t)(r[2 * (base + i)] | (uint16_t)r[2 * (base + i) + 1] << 8);
+        xr_put_span(t.surf, t.clip, &p, t.ox + dx + base, t.oy + dy + yy, chunk, n);
+      }
+    }
+    touched(x, &t);
+    return 0;
+  }
   if (bits && xr_put_image16(t.surf, t.clip, &p, t.ox + dx, t.oy + dy, w, h, data, row)) {
     touched(x, &t);
     return 0;
@@ -2707,14 +2762,68 @@ static size_t query_extension(ctx *x) {
   REQ_MIN(8);
   size_t n = U16(4);
   if (x->len != 8 + x_pad4(n)) return error(x, X11_BAD_LENGTH, 0);
-  reply(x, 0, 0);  /* present = False: this server has no extensions */
+  uint8_t *r = reply(x, 0, 0);
+  if (n == 5 && !memcmp(x->q + 8, "XTEST", 5)) {
+    r[8] = 1;
+    r[9] = X11_XTEST_MAJOR_OPCODE;
+  }
   return 32;
 }
 
 static size_t list_extensions(ctx *x) {
   REQ_LEN(1);
-  reply(x, 0, 0);
-  return 32;
+  uint8_t *r = reply(x, 1, 8);
+  r[32] = 5;
+  memcpy(r + 33, "XTEST", 5);
+  return 40;
+}
+
+static size_t xtest_request(ctx *x) {
+  switch (U8(1)) {
+    case 0: { /* GetVersion */
+      REQ_LEN(2);
+      uint8_t major = U8(4);
+      uint16_t minor = U16(6);
+      uint8_t *r = reply(x, major < X11_XTEST_VERSION_MAJOR ? major : X11_XTEST_VERSION_MAJOR, 0);
+      x_wr16(r + 8, minor < X11_XTEST_VERSION_MINOR ? minor : X11_XTEST_VERSION_MINOR, x->msb);
+      return 32;
+    }
+    case 1: /* CompareCursor: Woodland does not draw cursor images. */
+      return error(x, X11_BAD_IMPLEMENTATION, 0);
+    case 2: { /* FakeInput */
+      REQ_LEN(9);
+      uint8_t type = U8(4), detail = U8(5);
+      uint32_t delay = U32(8), root = U32(12);
+      if (type < 2 || type > 6) return error(x, X11_BAD_VALUE, type);
+      /* x2x uses CurrentTime (zero); delays need per-client request scheduling. */
+      if (delay) return error(x, X11_BAD_VALUE, delay);
+      if (type == 6 && root && root != X11_ID_ROOT_WINDOW) return error(x, X11_BAD_WINDOW, root);
+      if (type == 6) {
+        int relative = detail != 0;
+        int px = I16(24), py = I16(26);
+        if (relative) px += x->s->in_x, py += x->s->in_y;
+        (void)x11_test_pointer_input(x->s, x->ci, type, detail, relative, px, py);
+        ++x->s->xtest_fake[0];
+      } else if (type == 4 || type == 5) {
+        if (detail < 1 || detail > 5) return error(x, X11_BAD_VALUE, detail);
+        int rc = x11_test_pointer_input(x->s, x->ci, type, detail, 0, x->s->in_x, x->s->in_y);
+        (void)rc;
+        ++x->s->xtest_fake[type == 4 ? 1 : 2];
+      } else {
+        /* There is no keyboard device on this server. */
+        ++x->s->xtest_key_ignored;
+      }
+      return 0;
+    }
+    case 3: { /* GrabControl */
+      REQ_LEN(2);
+      if (U8(4) > 1) return error(x, X11_BAD_VALUE, U8(4));
+      x->c->xtest_impervious = U8(4);
+      return 0;
+    }
+    default:
+      return error(x, X11_BAD_REQUEST, U8(1));
+  }
 }
 
 /* ---- selections ----------------------------------------------------------------------- */
@@ -3507,6 +3616,7 @@ static size_t get_image(ctx *x) {
     x_wr32(head + 4, (uint32_t)(n / 4), x->msb);
     x_wr32(head + 8, visual, x->msb);
     x->stream->src = src;
+    x->stream->kind = 1;
     x->stream->src_x = ox + gx;
     x->stream->src_y = oy + gy;
     x->stream->width = (uint16_t)w;
@@ -3527,8 +3637,7 @@ static size_t get_image(ctx *x) {
   for (int yy = 0; yy < h; ++yy)
     for (int xx = 0; xx < w; ++xx) {
       int px = ox + gx + xx, py = oy + gy + yy;
-      uint32_t v = depth == 16 ? ((const uint16_t *)src->pix)[py * src->stride + px]
-                               : ((const uint8_t *)src->pix)[py * src->stride + px];
+      uint32_t v = xr_get(src, px, py);
       v &= planes;
       if (format == 2 && depth == 16) {  /* image byte order LSBFirst */
         uint8_t *q = d + x_pad4((size_t)w * 2) * yy + 2 * xx;
@@ -3664,6 +3773,7 @@ static size_t dispatch(ctx *x) {
     case 113: return kill_client(x);
     case 114: return rotate_properties(x);
     case 127: return 0;  /* NoOperation */
+    case X11_XTEST_MAJOR_OPCODE: return xtest_request(x);
     default:
       return error(x, X11_BAD_REQUEST, 0);  /* not a core request (all 119 are handled); no extensions */
   }
@@ -3687,7 +3797,7 @@ static size_t client_request(x11_server *s, int ci, const uint8_t *q, size_t len
   x11_client *c = &s->clients[ci];
   ctx x = {s, ci, c, c->msb, out, out_cap, q, len, q[0], stream};
   *close_after = 0;
-  if (out_cap < X11_REPLY_MAX) return 0;
+  if (out_cap < 32) return 0;
   if (stream) memset(stream, 0, sizeof(*stream));
   ++c->seq;
   ++c->requests;
@@ -3729,8 +3839,18 @@ size_t x11_client_request_stream(x11_server *s, int ci, const uint8_t *q, size_t
 
 static uint32_t stream_pixel(const x11_reply_stream *s, int x, int y) {
   int px = s->src_x + x, py = s->src_y + y;
-  if (s->depth == 16) return ((const uint16_t *)s->src->pix)[(size_t)py * s->src->stride + px];
-  return ((const uint8_t *)s->src->pix)[(size_t)py * s->src->stride + px];
+  if (s->depth == 16 && s->src->ops && s->src->ops->read_span) {
+    x11_reply_stream *m = (x11_reply_stream *)s;
+    if (m->cache_y != py || px < m->cache_x || px >= m->cache_x + m->cache_n) {
+      m->cache_x = px;
+      m->cache_y = py;
+      m->cache_n = s->src_x + s->width - px;
+      if (m->cache_n > 320) m->cache_n = 320;
+      s->src->ops->read_span(s->src->ctx, px, py, m->cache_n, m->read_cache);
+    }
+    return m->read_cache[px - m->cache_x];
+  }
+  return xr_get(s->src, px, py);
 }
 
 size_t x11_reply_stream_read(x11_reply_stream *s, uint8_t *out, size_t cap) {
@@ -3740,7 +3860,14 @@ size_t x11_reply_stream_read(x11_reply_stream *s, uint8_t *out, size_t cap) {
   memset(out, 0, n);
   for (size_t i = 0; i < n; ++i) {
     size_t at = s->offset + i;
-    if (s->format == 2 && s->depth == 16) {
+    if (s->kind == 2) {
+      size_t unit = s->prop_format / 8;
+      if (at < s->prop_bytes) {
+        size_t src = at;
+        if (s->prop_msb && unit > 1) src = (at / unit) * unit + (unit - 1 - at % unit);
+        out[i] = s->prop_data[src];
+      }
+    } else if (s->format == 2 && s->depth == 16) {
       size_t y = at / s->row_bytes, col = at % s->row_bytes;
       if (col < (size_t)s->width * 2) {
         uint32_t v = stream_pixel(s, (int)(col / 2), (int)y) & s->planes;
@@ -3769,8 +3896,19 @@ size_t x11_reply_stream_read(x11_reply_stream *s, uint8_t *out, size_t cap) {
     }
   }
   s->offset += n;
-  if (s->offset == s->total) s->active = 0;
+  if (s->offset == s->total) {
+    s->active = 0;
+    if (s->prop_owned && s->owner) x_free(s->owner, s->prop_owned_data);
+    s->prop_owned = 0;
+    s->prop_owned_data = 0;
+  }
   return n;
+}
+
+void x11_reply_stream_cancel(x11_reply_stream *s) {
+  if (!s) return;
+  if (s->prop_owned && s->owner) x_free(s->owner, s->prop_owned_data);
+  memset(s, 0, sizeof(*s));
 }
 
 /* The platform sets a root property (public API, see x11_server.h). At the end of the file and

@@ -5,7 +5,7 @@ CC ?= cc
 CFLAGS ?= -std=c99 -Wall -Wextra -Werror -pedantic -O1 -g
 SAN = -fsanitize=address,undefined
 
-all: build/x11_host_server build/x11_host_server_san build/x11_host_server_trace build/test_latency_trace build/ota_device_sim build/test_ota build/test_setup build/test_requests build/test_core_complete build/test_polyrect build/test_viewer_scroll build/test_stream build/test_event_drain build/test_render build/test_outq build/test_wm build/test_input build/test_copy build/test_image build/test_colormap build/test_text build/test_text_fast build/test_spilink build/test_x11spi build/spilink_vectors build/test_shot build/test_mt build/test_gesture build/gesture_replay build/test_gate build/test_touchchain build/test_pclk build/test_board_start build/test_backlight_x11
+all: build/x11_host_server build/x11_host_server_san build/x11_host_server_trace build/test_latency_trace build/ota_device_sim build/test_ota build/test_setup build/test_requests build/test_core_complete build/test_polyrect build/test_viewer_scroll build/test_stream build/test_event_drain build/test_render build/test_outq build/test_wm build/test_input build/test_copy build/test_image build/test_colormap build/test_text build/test_text_fast build/test_spilink build/test_x11spi build/spilink_vectors build/test_shot build/test_mt build/test_gesture build/gesture_replay build/test_gate build/test_touchchain build/test_pclk build/test_board_start build/test_backlight_x11 build/test_gram_surface
 ifeq ($(shell uname -s),Darwin)
 all: build/macos_viewer build/test_viewer_view
 VIEWER_TEST = ./build/test_viewer_view
@@ -182,6 +182,10 @@ build/test_render: tests/test_render.c $(CORE) $(CORE_H)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_render.c $(CORE) -lm
 
+build/test_gram_surface: tests/test_gram_surface.c $(CORE) $(CORE_H)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_gram_surface.c $(CORE) -lm
+
 build/test_wm: tests/test_wm.c $(CORE) $(CORE_H)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_wm.c $(CORE) -lm
@@ -205,6 +209,7 @@ test: all
 	./build/test_stream
 	./build/test_event_drain
 	./build/test_render
+	./build/test_gram_surface
 	./build/test_copy
 	./build/test_image
 	./build/test_colormap
@@ -224,7 +229,7 @@ test: all
 	./build/test_input
 	./build/test_ota
 	./build/test_latency_trace
-	python3 -m unittest -v tests/test_host.py tests/test_core_complete_host.py tests/test_viewer_link.py tests/test_fuzz.py tests/test_xclock.py tests/test_wm.py tests/test_touch.py tests/test_mt_host.py tests/test_scale.py tests/test_bench.py tests/test_runtime_profile_bench.py tests/test_latency_trace.py tests/test_ota.py tests/test_spilink_py.py tests/test_touch_diag.py tests/test_screenshot.py tests/test_display_settings.py
+	python3 -m unittest -v tests/test_host.py tests/test_core_complete_host.py tests/test_viewer_link.py tests/test_fuzz.py tests/test_xclock.py tests/test_wm.py tests/test_touch.py tests/test_mt_host.py tests/test_scale.py tests/test_bench.py tests/test_runtime_profile_bench.py tests/test_latency_trace.py tests/test_ota.py tests/test_spilink_py.py tests/test_touch_diag.py tests/test_screenshot.py tests/test_display_settings.py tests/test_xauthority.py
 
 clean:
 	rm -rf build

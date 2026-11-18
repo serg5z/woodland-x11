@@ -27,7 +27,7 @@ void x11_default_config(x11_server_config *cfg) {
   cfg->width_mm = 95;
   cfg->height_mm = 54;
   cfg->release = 1;
-  cfg->vendor = "Woodland Lab experimental X11 (ESP32-S3)";
+  cfg->vendor = "Woodland Lab experimental X11";
   cfg->max_request_units = 4096; /* 16 KiB: the protocol minimum, sized for ESP32 RAM */
   cfg->cookie = NULL;
   cfg->max_clients = 0;

@@ -325,7 +325,7 @@ static uint16_t px[24 * 18];
 
 static void draw(const gcase *c, uint8_t function, uint16_t back) {
   for (int i = 0; i < c->w * c->h; ++i) px[i] = back;
-  xr_surface s = {px, c->w, c->h, c->w, 16, 0};
+  xr_surface s = {px, c->w, c->h, c->w, 16, 0, 0, 0, 0};
   xr_region clip;
   if (!c->nclip) {
     xr_region_set(&clip, 0, 0, c->w, c->h);
@@ -383,7 +383,7 @@ static void test_each_pixel_once(void) {
 /* Huge rectangles and coordinates near the 16-bit limits: bounded work, no stray pixels. */
 static void test_large_coordinates(void) {
   static uint16_t big[64 * 48];
-  xr_surface s = {big, 64, 48, 64, 16, 0};
+  xr_surface s = {big, 64, 48, 64, 16, 0, 0, 0, 0};
   xr_region all;
   xr_region_set(&all, 0, 0, 64, 48);
   xr_paint even = {3, 0xFFFFFFFFu, FG, BG}, odd = even;

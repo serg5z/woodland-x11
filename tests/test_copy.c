@@ -95,6 +95,46 @@ static void test_pool_basics(void) {
 static uint16_t a16[SW * SH], b16[SW * SH], ref16[SW * SH], src16[SW * SH];
 static uint8_t a1[SW * SH], b1[SW * SH], ref1[SW * SH], src1[SW * SH];
 
+static void pack_bitmap(uint8_t *dst, const uint8_t *src, int w, int h) {
+  size_t stride = ((size_t)w + 7u) / 8u;
+  memset(dst, 0, stride * (size_t)h);
+  for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x)
+    if (src[y * w + x] & 1u) dst[(size_t)y * stride + (unsigned)x / 8] |= (uint8_t)(1u << (x & 7));
+}
+
+static int test_compact_bitmap_copy(void) {
+  enum { W = 13, H = 9, STRIDE = 2 };
+  uint8_t packed[H * STRIDE], packed_src[H * STRIDE], packed_ref[H * STRIDE];
+  uint8_t expanded[W * H], expanded_src[W * H], expanded_ref[W * H];
+  xr_region clip; xr_region_set(&clip, 0, 0, W, H);
+  xr_paint p = {3, 1, 1, 0};
+  for (int function = 0; function < 16; ++function) for (int planes = 0; planes < 2; ++planes)
+    for (int same = 0; same < 2; ++same) {
+      for (int i = 0; i < W * H; ++i) expanded[i] = (uint8_t)(rnd() & 1u), expanded_src[i] = (uint8_t)(rnd() & 1u);
+      pack_bitmap(packed, expanded, W, H); pack_bitmap(packed_src, expanded_src, W, H);
+      memcpy(packed_ref, packed, sizeof(packed)); memcpy(expanded_ref, expanded, sizeof(expanded));
+      xr_surface d = {.pix=packed,.w=W,.h=H,.stride=STRIDE,.depth=1,.packed1=1};
+      xr_surface r = {.pix=expanded,.w=W,.h=H,.stride=W,.depth=1};
+      xr_surface s = {.pix=packed_src,.w=W,.h=H,.stride=STRIDE,.depth=1,.packed1=1};
+      xr_surface rs = {.pix=expanded_src,.w=W,.h=H,.stride=W,.depth=1};
+      xr_surface rd = {.pix=packed_ref,.w=W,.h=H,.stride=STRIDE,.depth=1,.packed1=1};
+      p.function = (uint8_t)function; p.plane_mask = (uint32_t)planes; p.fg = (uint32_t)(rnd() & 1u); p.bg = (uint32_t)(rnd() & 1u);
+      if (same) {
+        xr_copy(&d, &clip, &p, &d, 1, 1, 10, 6, 2, 2);
+        xr_copy(&rd, &clip, &p, &rd, 1, 1, 10, 6, 2, 2);
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) if (xr_get(&d,x,y) != xr_get(&rd,x,y)) return 0;
+      } else {
+        xr_copy(&d, &clip, &p, &s, 1, 1, 10, 6, 2, 2);
+        xr_copy(&r, &clip, &p, &rs, 1, 1, 10, 6, 2, 2);
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) if (xr_get(&d,x,y) != xr_get(&r,x,y)) return 0;
+        xr_copy_plane(&d, &clip, &p, &s, 0, 0, W, H, 0, 0, 1);
+        xr_copy_plane(&r, &clip, &p, &rs, 0, 0, W, H, 0, 0, 1);
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) if (xr_get(&d,x,y) != xr_get(&r,x,y)) return 0;
+      }
+    }
+  return 1;
+}
+
 static void random_clip(xr_region *g) {
   xr_region_set(g, rr(-5, 20), rr(-5, 15), rr(40, SW + 5), rr(30, SH + 5));
   int holes = rr(0, 4);
@@ -125,8 +165,8 @@ static int copy_case(int depth, int same, int function, uint32_t planes, int pla
   xr_paint p = {(uint8_t)function, planes, (uint32_t)rnd() & 0xFFFF, (uint32_t)rnd() & 0xFFFF};
   if (depth == 1) p.fg &= 1, p.bg &= 1;
   xr_damage da, dr;
-  xr_surface D = {dpix, SW, SH, SW, depth, &da}, R = {rpix, SW, SH, SW, depth, &dr};
-  xr_surface Sd = {spix, SW, SH, SW, depth, 0}, Sp = {src1, SW, SH, SW, 1, 0};
+  xr_surface D = {dpix, SW, SH, SW, depth, &da, 0, 0, 0}, R = {rpix, SW, SH, SW, depth, &dr, 0, 0, 0};
+  xr_surface Sd = {spix, SW, SH, SW, depth, 0, 0, 0, 0}, Sp = {src1, SW, SH, SW, 1, 0, 0, 0, 0};
   xr_damage_reset(&da);
   xr_damage_reset(&dr);
   int opaque = (int)(rnd() & 1);
@@ -173,7 +213,7 @@ static void test_copy_exact(void) {
       xr_region all;
       xr_region_set(&all, 0, 0, SW, SH);
       xr_paint p = {3, 0xFFFFFFFFu, 0, 0};
-      xr_surface D = {a16, SW, SH, SW, 16, 0}, R = {ref16, SW, SH, SW, 16, 0};
+      xr_surface D = {a16, SW, SH, SW, 16, 0, 0, 0, 0}, R = {ref16, SW, SH, SW, 16, 0, 0, 0, 0};
       xr_copy_fast_enabled = 1;
       xr_copy(&D, &all, &p, &D, 10, 10, 60, 40, 10 + ddx, 10 + ddy);
       xr_copy_fast_enabled = 0;
@@ -332,6 +372,7 @@ static void test_request_bad_alloc(void) {
 int main(void) {
   test_pool_basics();
   test_copy_exact();
+  CHECK(test_compact_bitmap_copy());
   test_copy_810();
   test_request_bad_alloc();
   if (failures) {
