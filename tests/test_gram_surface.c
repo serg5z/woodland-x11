@@ -32,6 +32,13 @@ static void sync_initial(void) { for(int i=0;i<W*H;++i) ram[i]=gr.mem[i]=pat(i%W
 static int equal(void) { for(int i=0;i<W*H;++i) if(ram[i]!=gr.mem[i]) {fprintf(stderr,"pixel %d,%d RAM=%04x GRAM=%04x\n",i%W,i/W,ram[i],gr.mem[i]);return 0;} return 1; }
 int main(void) {
   xr_region clip; xr_region_set(&clip,3,5,317,235); xr_paint p={3,0xffff,0x5a3c,0};
+  CHECK(xr_bits_fast(&a,&p));
+  CHECK(!xr_bits_fast(&b,&p));
+  CHECK(!xr_put_image16(&b,&clip,&p,0,0,1,1,(const uint8_t *)"\x34\x12",2));
+  uint8_t bitmap_bytes[4]={0};
+  xr_surface bitmap={bitmap_bytes,8,4,1,1,0,0,0,1};
+  xr_paint bitmap_p={3,1,1,0};
+  CHECK(!xr_bits_fast(&bitmap,&bitmap_p));
   sync_initial(); xr_fill_rect(&a,&clip,&p,-10,20,300,80); xr_fill_rect(&b,&clip,&p,-10,20,300,80); CHECK(equal());
   uint16_t image[96]; for (int i=0;i<96;++i) image[i]=(uint16_t)(i*521u+0x37a1u);
   p.function=3; p.plane_mask=0xffff;

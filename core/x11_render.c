@@ -635,7 +635,8 @@ int xr_image_fast_enabled = 1;
 
 int xr_put_image16(const xr_surface *s, const xr_region *clip, const xr_paint *p, int x, int y, int w, int h,
                    const uint8_t *data, size_t stride) {
-  if (!xr_image_fast_enabled || fill || s->depth != 16 || p->function != 3 || (p->plane_mask & 0xFFFFu) != 0xFFFFu)
+  if (!xr_image_fast_enabled || fill || s->ops || s->depth != 16 || p->function != 3 ||
+      (p->plane_mask & 0xFFFFu) != 0xFFFFu)
     return 0;
   static const uint16_t one = 1;
   int little = *(const uint8_t *)&one == 1;  /* the image's byte order is the framebuffer's */
@@ -670,7 +671,7 @@ int xr_text_fast_enabled = 1;
 
 int xr_bits_fast(const xr_surface *s, const xr_paint *p) {
   uint32_t full = s->depth == 1 ? 1u : 0xFFFFu;
-  return xr_text_fast_enabled && !fill && p->function == 3 &&  /* depth is 1 or 16 */
+  return xr_text_fast_enabled && !fill && !s->ops && !s->packed1 && p->function == 3 &&  /* depth is 1 or 16 */
          (p->plane_mask & full) == full;
 }
 
